@@ -9,7 +9,7 @@ Files
 - `opendart_gui.py`: Main GUI application.
 - `download_business_reports.py`: OpenDART/DART and Naver Finance download logic with optional CLI.
 - `crawl_company_news.py`: Naver/Google company news metadata crawler.
-- `crawl_catch_recruits.py`: Catch recruit metadata crawler with one-shot and watch modes.
+- `crawl_catch_recruits.py`: Catch recruit metadata crawler.
 - `test_crawl_company_news.py`: Unit tests for the news crawler.
 - `test_crawl_catch_recruits.py`: Unit tests for the Catch recruit crawler.
 - `.env`: API key configuration file for OpenDART.
@@ -36,10 +36,10 @@ Double-click `run_downloader.bat` to open the app.
 The app has three tabs:
 
 - `Business Reports`: download annual business report PDFs through OpenDART.
-- `Catch Recruits`: read Catch recruit postings once or start regular reading.
+- `Catch Recruits`: read Catch recruit postings.
 - `Company News`: crawl Naver News and Google News metadata over a date range and save JSON.
 
-Business report and news tabs use the company search UX: type a company name or stock code, then select the exact company from the suggestions shown under the input box. Catch recruit search can also be left blank to read general recruit postings.
+Business report and news tabs use the company search UX: type a company name or stock code, then select the exact company from the suggestions shown under the input box. Catch recruit search uses a plain title keyword only, and can be left blank to read general recruit postings.
 
 In `Business Reports`:
 
@@ -53,14 +53,12 @@ For `Naver Finance research`, use the same company suggestion list, then set `Na
 
 In `Catch Recruits`:
 
-1. Type a keyword/company name, or leave it blank to read general recruit postings.
+1. Type a title keyword, or leave it blank to read general recruit postings.
 2. Choose an output folder.
 3. Set the recruit opening date range, or click `Today` / check `Today only`.
-4. Set `Max results`.
-5. Click `Read Once`, or set `Interval minutes` and click `Start Regular Reading`.
-6. Click `Stop` to end regular reading.
+4. Click `Read Once`.
 
-Each Catch run saves a timestamped JSON file in the selected output folder and shows the latest results in the table.
+Each Catch run reads up to 3000 postings, saves a timestamped JSON file in the selected output folder, and shows the latest results in the table. If a title keyword is set, only postings whose title includes that keyword are saved and displayed.
 Double-click a row in the table to open the Catch recruit posting in your browser.
 
 In `Company News`:
@@ -98,7 +96,6 @@ Catch recruit postings:
 ```powershell
 python .\crawl_catch_recruits.py Samsung --max-results 30
 python .\crawl_catch_recruits.py Samsung --start-date 2026-04-25 --end-date 2026-04-25 --max-results 30
-python .\crawl_catch_recruits.py Samsung --watch --interval-minutes 60 --max-results 30
 ```
 
 On Windows, command-line Catch crawling can also be started with:

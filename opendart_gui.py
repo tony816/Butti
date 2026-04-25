@@ -16,7 +16,6 @@ from crawl_company_news import (
     write_json as write_news_json,
 )
 from crawl_catch_recruits import (
-    DEFAULT_INTERVAL_MINUTES,
     DEFAULT_MAX_RESULTS,
     CatchRecruitError,
     crawl_catch_recruits,
@@ -31,6 +30,7 @@ from download_business_reports import (
     download_business_reports,
     download_naver_research_reports,
     get_configured_api_key,
+    parse_date_arg,
     search_companies,
 )
 
@@ -49,13 +49,13 @@ class DownloaderApp(tk.Tk):
 
         self.message_queue = queue.Queue()
         self.worker = None
+        self.batch_worker = None
         self.catch_worker = None
-        self.catch_stop_event = threading.Event()
         self.catch_links = {}
-        self.lookup_tokens = {"reports": 0, "catch": 0, "news": 0}
-        self.lookup_after_ids = {"reports": None, "catch": None, "news": None}
-        self.lookup_candidates = {"reports": [], "catch": [], "news": []}
-        self.selected_corps = {"reports": None, "catch": None, "news": None}
+        self.lookup_tokens = {"reports": 0, "catch": 0, "news": 0, "batch": 0}
+        self.lookup_after_ids = {"reports": None, "catch": None, "news": None, "batch": None}
+        self.lookup_candidates = {"reports": [], "catch": [], "news": [], "batch": []}
+        self.selected_corps = {"reports": None, "catch": None, "news": None, "batch": None}
 
         self.company_var = tk.StringVar()
         self.report_source_var = tk.StringVar(value="OpenDART business reports")
@@ -69,8 +69,6 @@ class DownloaderApp(tk.Tk):
 
         self.catch_keyword_var = tk.StringVar()
         self.catch_output_var = tk.StringVar(value=str(DEFAULT_OUTPUT_DIR))
-        self.catch_max_results_var = tk.IntVar(value=DEFAULT_MAX_RESULTS)
-        self.catch_interval_var = tk.DoubleVar(value=DEFAULT_INTERVAL_MINUTES)
         self.catch_start_var = tk.StringVar(value=(date.today() - timedelta(days=30)).isoformat())
         self.catch_end_var = tk.StringVar(value=date.today().isoformat())
         self.catch_today_only_var = tk.BooleanVar(value=False)
@@ -83,6 +81,13 @@ class DownloaderApp(tk.Tk):
         self.news_output_var = tk.StringVar()
         self.news_max_results_var = tk.IntVar(value=DEFAULT_NEWS_MAX_RESULTS)
         self.news_status_var = tk.StringVar(value="Ready")
+
+        self.batch_company_var = tk.StringVar()
+        self.batch_dart_var = tk.BooleanVar(value=True)
+        self.batch_naver_var = tk.BooleanVar(value=True)
+        self.batch_catch_var = tk.BooleanVar(value=False)
+        self.batch_news_var = tk.BooleanVar(value=True)
+        self.batch_status_var = tk.StringVar(value="Ready")
 
         self.configure(bg="#f6f7f9")
         self._configure_style()
@@ -139,16 +144,81 @@ class DownloaderApp(tk.Tk):
         notebook = ttk.Notebook(self)
         notebook.pack(fill="both", expand=True, padx=18, pady=18)
 
+        batch_tab = ttk.Frame(notebook, padding=(6, 6))
         reports_tab = ttk.Frame(notebook, padding=(6, 6))
         catch_tab = ttk.Frame(notebook, padding=(6, 6))
         news_tab = ttk.Frame(notebook, padding=(6, 6))
+        notebook.add(batch_tab, text="Batch Run")
         notebook.add(reports_tab, text="Business Reports")
         notebook.add(catch_tab, text="Catch Recruits")
         notebook.add(news_tab, text="Company News")
 
+        self._build_batch_tab(batch_tab)
         self._build_reports_tab(reports_tab)
         self._build_catch_tab(catch_tab)
         self._build_news_tab(news_tab)
+
+    def _build_batch_tab(self, parent):
+        form = ttk.Frame(parent)
+        form.pack(fill="x")
+        form.columnconfigure(1, weight=1)
+
+        ttk.Label(form, text="Company / stock code", style="Field.TLabel").grid(row=0, column=0, sticky="w", pady=(0, 6))
+        company = ttk.Entry(form, textvariable=self.batch_company_var, font=self.input_font)
+        company.grid(row=1, column=0, columnspan=3, sticky="ew", pady=(0, 4))
+        company.bind("<KeyRelease>", lambda event: self._on_lookup_key_release("batch", event))
+        company.bind("<Return>", lambda event: self._select_active_company("batch", event))
+        company.bind("<Down>", lambda event: self._focus_company_suggestions("batch", event))
+
+        self.batch_suggestions = self._create_company_suggestion_list(form, "batch")
+        self.batch_suggestions.grid(row=2, column=0, columnspan=3, sticky="ew", pady=(0, 14))
+        self.batch_suggestions.grid_remove()
+
+        ttk.Label(form, text="Tasks", style="Field.TLabel").grid(row=3, column=0, sticky="w", pady=(0, 6))
+        task_frame = ttk.Frame(form)
+        task_frame.grid(row=4, column=0, columnspan=3, sticky="ew", pady=(0, 14))
+        ttk.Checkbutton(task_frame, text="OpenDART business reports", variable=self.batch_dart_var).pack(side="left")
+        ttk.Checkbutton(task_frame, text="Naver Finance research", variable=self.batch_naver_var).pack(side="left", padx=(14, 0))
+        ttk.Checkbutton(task_frame, text="Catch Recruits", variable=self.batch_catch_var).pack(side="left", padx=(14, 0))
+        ttk.Checkbutton(task_frame, text="Company News", variable=self.batch_news_var).pack(side="left", padx=(14, 0))
+
+        ttk.Label(form, text="Settings source", style="Field.TLabel").grid(row=5, column=0, sticky="w", pady=(0, 6))
+        ttk.Label(
+            form,
+            text="Batch uses the current settings from Business Reports, Catch Recruits, and Company News tabs.",
+        ).grid(row=6, column=0, columnspan=3, sticky="w", pady=(0, 18))
+
+        actions = ttk.Frame(parent)
+        actions.pack(fill="x", pady=(4, 14))
+        self.batch_run_button = ttk.Button(
+            actions,
+            text="Run Selected Tasks",
+            style="Accent.TButton",
+            command=self._start_batch_run,
+        )
+        self.batch_run_button.pack(side="left")
+        ttk.Label(actions, textvariable=self.batch_status_var).pack(side="left", padx=(16, 0))
+
+        self.batch_progress = ttk.Progressbar(parent, mode="indeterminate")
+        self.batch_progress.pack(fill="x", pady=(0, 14))
+
+        log_frame = ttk.Frame(parent)
+        log_frame.pack(fill="both", expand=True)
+        self.batch_log = tk.Text(
+            log_frame,
+            height=18,
+            wrap="word",
+            relief="flat",
+            bg="#ffffff",
+            fg="#1f2933",
+            font=self.log_font,
+            padx=12,
+            pady=10,
+        )
+        scrollbar = ttk.Scrollbar(log_frame, orient="vertical", command=self.batch_log.yview)
+        self.batch_log.configure(yscrollcommand=scrollbar.set)
+        self.batch_log.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
 
     def _build_reports_tab(self, parent):
         form = ttk.Frame(parent)
@@ -240,7 +310,7 @@ class DownloaderApp(tk.Tk):
         form.pack(fill="x")
         form.columnconfigure(1, weight=1)
 
-        ttk.Label(form, text="Keyword / company (optional)", style="Field.TLabel").grid(row=0, column=0, sticky="w", pady=(0, 6))
+        ttk.Label(form, text="Company / stock code", style="Field.TLabel").grid(row=0, column=0, sticky="w", pady=(0, 6))
         keyword = ttk.Entry(form, textvariable=self.catch_keyword_var, font=self.input_font)
         keyword.grid(row=1, column=0, columnspan=3, sticky="ew", pady=(0, 4))
         keyword.bind("<KeyRelease>", lambda event: self._on_lookup_key_release("catch", event))
@@ -269,21 +339,12 @@ class DownloaderApp(tk.Tk):
             command=self._sync_catch_today_only,
         ).pack(side="left", padx=(8, 0))
 
-        ttk.Label(form, text="Max results", style="Field.TLabel").grid(row=7, column=0, sticky="w", pady=(0, 6))
-        ttk.Spinbox(form, from_=1, to=300, textvariable=self.catch_max_results_var, width=10).grid(row=8, column=0, sticky="w", pady=(0, 14))
-
-        ttk.Label(form, text="Interval minutes", style="Field.TLabel").grid(row=7, column=1, sticky="w", pady=(0, 6))
-        ttk.Spinbox(form, from_=1, to=1440, increment=5, textvariable=self.catch_interval_var, width=12).grid(row=8, column=1, sticky="w", pady=(0, 14))
+        ttk.Label(form, text=f"Max results: {DEFAULT_MAX_RESULTS}", style="Field.TLabel").grid(row=7, column=0, sticky="w", pady=(0, 18))
 
         actions = ttk.Frame(parent)
         actions.pack(fill="x", pady=(4, 14))
         self.catch_read_button = ttk.Button(actions, text="Read Once", style="Accent.TButton", command=self._start_catch_once)
         self.catch_read_button.pack(side="left")
-        self.catch_watch_button = ttk.Button(actions, text="Start Regular Reading", command=self._start_catch_watch)
-        self.catch_watch_button.pack(side="left", padx=(8, 0))
-        self.catch_stop_button = ttk.Button(actions, text="Stop", style="Stop.TButton", command=self._stop_catch_watch)
-        self.catch_stop_button.pack(side="left", padx=(8, 0))
-        self.catch_stop_button.state(["disabled"])
         ttk.Label(actions, textvariable=self.catch_status_var).pack(side="left", padx=(16, 0))
 
         self.catch_progress = ttk.Progressbar(parent, mode="indeterminate")
@@ -434,6 +495,7 @@ class DownloaderApp(tk.Tk):
 
     def _lookup_var(self, kind):
         return {
+            "batch": self.batch_company_var,
             "reports": self.company_var,
             "catch": self.catch_keyword_var,
             "news": self.news_company_var,
@@ -441,6 +503,7 @@ class DownloaderApp(tk.Tk):
 
     def _lookup_listbox(self, kind):
         return {
+            "batch": self.batch_suggestions,
             "reports": self.company_suggestions,
             "catch": self.catch_suggestions,
             "news": self.news_suggestions,
@@ -448,13 +511,16 @@ class DownloaderApp(tk.Tk):
 
     def _lookup_status_var(self, kind):
         return {
+            "batch": self.batch_status_var,
             "reports": self.status_var,
             "catch": self.catch_status_var,
             "news": self.news_status_var,
         }[kind]
 
     def _lookup_log(self, kind, message):
-        if kind == "reports":
+        if kind == "batch":
+            self._batch_log(message)
+        elif kind == "reports":
             self._log(message)
         elif kind == "catch":
             self._catch_log(message)
@@ -558,6 +624,158 @@ class DownloaderApp(tk.Tk):
             self.naver_end_entry.state(["disabled"])
             self.report_count_label.configure(text="Reports")
             self.report_count_spinbox.configure(textvariable=self.years_var, from_=1, to=10)
+
+    def _selected_batch_tasks(self):
+        tasks = []
+        if self.batch_dart_var.get():
+            tasks.append("dart")
+        if self.batch_naver_var.get():
+            tasks.append("naver")
+        if self.batch_catch_var.get():
+            tasks.append("catch")
+        if self.batch_news_var.get():
+            tasks.append("news")
+        return tasks
+
+    def _validate_batch_run(self):
+        tasks = self._selected_batch_tasks()
+        if not self.selected_corps["batch"]:
+            messagebox.showwarning(APP_TITLE, "Choose a company from the batch search suggestions first.")
+            return None
+        if not tasks:
+            messagebox.showwarning(APP_TITLE, "Choose at least one batch task.")
+            return None
+        api_key = self.api_key_var.get().strip()
+        if "dart" in tasks and not api_key:
+            messagebox.showwarning(APP_TITLE, "OpenDART batch task needs an API key.")
+            return None
+
+        try:
+            naver_start = parse_date_arg(self.naver_start_var.get().strip(), "Naver start date")
+            naver_end = parse_date_arg(self.naver_end_var.get().strip(), "Naver end date")
+            if naver_start and naver_end and naver_start > naver_end:
+                raise DartError("Naver start date must be earlier than or equal to Naver end date.")
+        except DartError as exc:
+            messagebox.showwarning(APP_TITLE, str(exc))
+            return None
+
+        try:
+            news_start = parse_news_date(self.news_start_var.get().strip())
+            news_end = parse_news_date(self.news_end_var.get().strip())
+        except NewsCrawlerError as exc:
+            messagebox.showwarning(APP_TITLE, str(exc))
+            return None
+
+        try:
+            if self.catch_today_only_var.get():
+                catch_start = date.today().isoformat()
+                catch_end = catch_start
+            else:
+                catch_start = self.catch_start_var.get().strip()
+                catch_end = self.catch_end_var.get().strip()
+            parse_catch_date(catch_start)
+            parse_catch_date(catch_end)
+        except CatchRecruitError as exc:
+            messagebox.showwarning(APP_TITLE, str(exc))
+            return None
+        if parse_catch_date(catch_end) < parse_catch_date(catch_start):
+            messagebox.showwarning(APP_TITLE, "Catch end date must be the same as or later than start date.")
+            return None
+
+        return {
+            "tasks": tasks,
+            "corp": self.selected_corps["batch"],
+            "api_key": api_key,
+            "company": self.selected_corps["batch"]["corp_name"],
+            "naver_start": naver_start,
+            "naver_end": naver_end,
+            "news_start": news_start,
+            "news_end": news_end,
+            "catch_start": catch_start,
+            "catch_end": catch_end,
+        }
+
+    def _start_batch_run(self):
+        if self.batch_worker and self.batch_worker.is_alive():
+            return
+        if self.worker and self.worker.is_alive() or self.catch_worker and self.catch_worker.is_alive():
+            messagebox.showwarning(APP_TITLE, "Another task is already running.")
+            return
+        config = self._validate_batch_run()
+        if not config:
+            return
+
+        self._hide_company_suggestions("batch")
+        self.batch_log.delete("1.0", "end")
+        self._set_batch_running(True)
+        self._batch_log(f"Starting batch for {config['company']}")
+        self.batch_worker = threading.Thread(target=self._run_batch, args=(config,), daemon=True)
+        self.batch_worker.start()
+
+    def _run_batch(self, config):
+        try:
+            completed = 0
+            for task in config["tasks"]:
+                if task == "dart":
+                    self.message_queue.put(("batch_log", "Running OpenDART business reports..."))
+                    result = download_business_reports(
+                        config["company"],
+                        api_key=config["api_key"],
+                        years=self.years_var.get(),
+                        output_dir=Path(self.output_var.get()),
+                        progress=lambda message: self.message_queue.put(("batch_log", message)),
+                        corp=config["corp"],
+                    )
+                    if result["failed"]:
+                        raise DartError(f"OpenDART failed for {len(result['failed'])} report(s).")
+                    completed += 1
+                    self.message_queue.put(("batch_log", f"OpenDART done: {len(result['downloaded'])} PDF file(s)."))
+                elif task == "naver":
+                    self.message_queue.put(("batch_log", "Running Naver Finance research..."))
+                    result = download_naver_research_reports(
+                        config["company"],
+                        count=self.naver_count_var.get(),
+                        output_dir=Path(self.output_var.get()),
+                        start_date=config["naver_start"],
+                        end_date=config["naver_end"],
+                        progress=lambda message: self.message_queue.put(("batch_log", message)),
+                    )
+                    if result["failed"]:
+                        raise DartError(f"Naver Finance failed for {len(result['failed'])} PDF file(s).")
+                    completed += 1
+                    self.message_queue.put(("batch_log", f"Naver Finance done: {len(result['downloaded'])} PDF file(s)."))
+                elif task == "catch":
+                    self.message_queue.put(("batch_log", "Running Catch Recruits..."))
+                    result, output_path = self._read_catch_to_file(
+                        keyword=config["company"],
+                        progress=lambda message: self.message_queue.put(("batch_log", message)),
+                    )
+                    completed += 1
+                    self.message_queue.put(("batch_log", f"Catch done: {len(result['items'])} item(s), {output_path}"))
+                    self.message_queue.put(("catch_result", result, output_path))
+                elif task == "news":
+                    self.message_queue.put(("batch_log", "Running Company News..."))
+                    output_text = self.news_output_var.get().strip()
+                    output_path = (
+                        Path(output_text)
+                        if output_text
+                        else default_news_output_path(config["company"], config["news_start"], config["news_end"])
+                    )
+                    result = crawl_company_news(
+                        company=config["company"],
+                        start_date=config["news_start"],
+                        end_date=config["news_end"],
+                        source=self.news_source_var.get(),
+                        max_results=self.news_max_results_var.get(),
+                        progress=lambda message: self.message_queue.put(("batch_log", message)),
+                    )
+                    saved_path = write_news_json(result, output_path)
+                    completed += 1
+                    self.message_queue.put(("batch_log", f"News done: {len(result['items'])} item(s), {saved_path}"))
+                    self.message_queue.put(("news_done", result, saved_path))
+            self.message_queue.put(("batch_done", completed, len(config["tasks"])))
+        except Exception as exc:
+            self.message_queue.put(("batch_error", exc))
 
     def _start_download(self):
         if self.worker and self.worker.is_alive():
@@ -684,30 +902,9 @@ class DownloaderApp(tk.Tk):
             return
         if not self._validate_catch_dates():
             return
-        self._hide_company_suggestions("catch")
-        self.catch_stop_event.clear()
-        self._set_catch_running(True, watching=False)
+        self._set_catch_running(True)
         self.catch_worker = threading.Thread(target=self._run_catch_once, daemon=True)
         self.catch_worker.start()
-
-    def _start_catch_watch(self):
-        if self.catch_worker and self.catch_worker.is_alive():
-            return
-        if self.catch_interval_var.get() <= 0:
-            messagebox.showwarning(APP_TITLE, "Interval minutes must be greater than 0.")
-            return
-        if not self._validate_catch_dates():
-            return
-        self._hide_company_suggestions("catch")
-        self.catch_stop_event.clear()
-        self._set_catch_running(True, watching=True)
-        self.catch_worker = threading.Thread(target=self._run_catch_watch, daemon=True)
-        self.catch_worker.start()
-
-    def _stop_catch_watch(self):
-        self.catch_stop_event.set()
-        self.catch_status_var.set("Stopping...")
-        self._catch_log("Stop requested.")
 
     def _run_catch_once(self):
         try:
@@ -716,21 +913,8 @@ class DownloaderApp(tk.Tk):
         except Exception as exc:
             self.message_queue.put(("catch_error", exc))
 
-    def _run_catch_watch(self):
-        try:
-            while not self.catch_stop_event.is_set():
-                self._read_catch_and_save()
-                interval_seconds = float(self.catch_interval_var.get()) * 60
-                self.message_queue.put(("catch_waiting", f"Waiting {self.catch_interval_var.get():g} minute(s)..."))
-                if self.catch_stop_event.wait(interval_seconds):
-                    break
-            self.message_queue.put(("catch_stopped", "Stopped."))
-        except Exception as exc:
-            self.message_queue.put(("catch_error", exc))
-
     def _read_catch_and_save(self):
         keyword = self.catch_keyword_var.get().strip()
-        max_results = int(self.catch_max_results_var.get())
         output_dir = Path(self.catch_output_var.get())
         if self.catch_today_only_var.get():
             start_date = date.today().isoformat()
@@ -744,7 +928,7 @@ class DownloaderApp(tk.Tk):
 
         result = crawl_catch_recruits(
             keyword=keyword,
-            max_results=max_results,
+            max_results=DEFAULT_MAX_RESULTS,
             start_date=start_date,
             end_date=end_date,
             progress=tell,
@@ -807,12 +991,7 @@ class DownloaderApp(tk.Tk):
                     self._catch_log(item[1])
                 elif isinstance(item, tuple) and item[0] == "catch_result":
                     self._show_catch_result(item[1], item[2])
-                elif isinstance(item, tuple) and item[0] == "catch_waiting":
-                    self.catch_status_var.set(item[1])
-                    self._catch_log(item[1])
                 elif isinstance(item, tuple) and item[0] == "catch_done":
-                    self._finish_catch(item[1])
-                elif isinstance(item, tuple) and item[0] == "catch_stopped":
                     self._finish_catch(item[1])
                 elif isinstance(item, tuple) and item[0] == "catch_error":
                     exc = item[1]
@@ -833,14 +1012,9 @@ class DownloaderApp(tk.Tk):
         self._sync_report_source_fields()
         self._log(status)
 
-    def _set_catch_running(self, running, watching=False):
+    def _set_catch_running(self, running):
         if running:
             self.catch_read_button.state(["disabled"])
-            self.catch_watch_button.state(["disabled"])
-            if watching:
-                self.catch_stop_button.state(["!disabled"])
-            else:
-                self.catch_stop_button.state(["disabled"])
             self.catch_progress.start(12)
             self.catch_status_var.set("Reading...")
             self._catch_log("")
@@ -848,8 +1022,6 @@ class DownloaderApp(tk.Tk):
         else:
             self.catch_progress.stop()
             self.catch_read_button.state(["!disabled"])
-            self.catch_watch_button.state(["!disabled"])
-            self.catch_stop_button.state(["disabled"])
 
     def _finish_catch(self, status):
         self._set_catch_running(False)
@@ -931,7 +1103,6 @@ class DownloaderApp(tk.Tk):
         self.news_log.see("end")
 
     def _on_close(self):
-        self.catch_stop_event.set()
         self.destroy()
 
 

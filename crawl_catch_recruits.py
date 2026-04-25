@@ -12,8 +12,7 @@ from pathlib import Path
 
 APP_DIR = Path(__file__).resolve().parent
 CATCH_RECRUIT_API = "https://www.catch.co.kr/api/v1.0/recruit/information/getRecruitList"
-DEFAULT_MAX_RESULTS = 30
-DEFAULT_INTERVAL_MINUTES = 60
+DEFAULT_MAX_RESULTS = 3000
 
 
 class CatchRecruitError(Exception):
@@ -210,6 +209,13 @@ def is_within_date_range(item, start_date=None, end_date=None):
     return True
 
 
+def title_contains_keyword(item, keyword):
+    keyword = clean_text(keyword).casefold()
+    if not keyword:
+        return True
+    return keyword in clean_text(item.get("title", "")).casefold()
+
+
 def crawl_catch_recruits(
     keyword="",
     max_results=DEFAULT_MAX_RESULTS,
@@ -243,7 +249,11 @@ def crawl_catch_recruits(
         if not rows:
             break
         normalized_rows = [normalize_recruit(row) for row in rows]
-        items.extend(item for item in normalized_rows if is_within_date_range(item, start_date, end_date))
+        items.extend(
+            item
+            for item in normalized_rows
+            if title_contains_keyword(item, keyword) and is_within_date_range(item, start_date, end_date)
+        )
         if len(rows) < request_page_size:
             break
         if start_date and normalized_rows:
@@ -292,31 +302,20 @@ def run_once(args):
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Read Catch recruit data and save it as JSON.")
-    parser.add_argument("keyword", nargs="?", default="", help="Company or keyword to search, for example Samsung or Naver")
+    parser.add_argument("keyword", nargs="?", default="", help="Title keyword to search. Leave blank for all postings.")
     parser.add_argument("--output", help="JSON output path. Defaults to catch_recruits_<keyword>_<timestamp>.json")
-    parser.add_argument("--max-results", type=int, default=DEFAULT_MAX_RESULTS, help="Maximum recruits to save. Default: 30")
+    parser.add_argument("--max-results", type=int, default=DEFAULT_MAX_RESULTS, help="Maximum recruits to save. Default: 3000")
     parser.add_argument("--page-size", type=int, default=30, help="Catch API page size. Default: 30")
     parser.add_argument("--sort", type=int, default=1, help="Catch sort code. 1 is latest on the current site.")
     parser.add_argument("--start-date", help="Only include postings opened on or after this date, YYYY-MM-DD.")
     parser.add_argument("--end-date", help="Only include postings opened on or before this date, YYYY-MM-DD.")
-    parser.add_argument("--watch", action="store_true", help="Keep reading on a regular interval.")
-    parser.add_argument("--interval-minutes", type=float, default=DEFAULT_INTERVAL_MINUTES, help="Watch interval. Default: 60")
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
-    if args.watch and args.interval_minutes <= 0:
-        raise CatchRecruitError("--interval-minutes must be greater than 0.")
-
-    if not args.watch:
-        run_once(args)
-        return 0
-
-    print(f"Watching Catch recruits every {args.interval_minutes:g} minute(s). Press Ctrl+C to stop.")
-    while True:
-        run_once(args)
-        time.sleep(args.interval_minutes * 60)
+    run_once(args)
+    return 0
 
 
 if __name__ == "__main__":
