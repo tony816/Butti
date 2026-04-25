@@ -13,6 +13,7 @@ Files
 - `test_crawl_company_news.py`: Unit tests for the news crawler.
 - `test_crawl_catch_recruits.py`: Unit tests for the Catch recruit crawler.
 - `.env`: API key configuration file for OpenDART.
+- `run_downloader.command`: double-click GUI launcher for macOS.
 - `run_downloader.bat`: double-click GUI launcher for Windows.
 - `run_downloader.ps1`: PowerShell GUI launcher.
 - `run_catch_recruits.bat`: double-click launcher for command-line Catch recruit crawling.
@@ -31,7 +32,9 @@ OPENDART_API_KEY=YOUR_API_KEY_HERE
 GUI
 ---
 
-Double-click `run_downloader.bat` to open the app.
+On macOS, double-click `run_downloader.command` to open the app.
+
+On Windows, double-click `run_downloader.bat` to open the app.
 
 The app has three tabs:
 
@@ -58,7 +61,8 @@ In `Catch Recruits`:
 3. Set the recruit opening date range, or click `Today` / check `Today only`.
 4. Click `Read Once`.
 
-Each Catch run reads up to 3000 postings, saves a timestamped JSON file in the selected output folder, and shows the latest results in the table. If a title keyword is set, only postings whose title includes that keyword are saved and displayed.
+Each Catch run reads up to the configured max result count, saves a timestamped JSON file in the selected output folder, and shows the latest results in the table. If a title keyword is set, only postings whose title includes that keyword are saved and displayed.
+Select one or more rows and click `Add Selected` to add them to the interested recruit list and automatically save `catch_interested_recruits.json` in the selected output folder. Click `Show Interested Only` to switch the table to interested recruits, and `Show All Results` to switch back.
 Double-click a row in the table to open the Catch recruit posting in your browser.
 
 In `Company News`:
@@ -116,4 +120,22 @@ Tests
 ```powershell
 python -m unittest test_crawl_company_news.py
 python -m unittest test_crawl_catch_recruits.py
+```
+
+AI Skill / CLI
+--------------
+
+This project can also be used by Codex through the installed `butti` skill at:
+
+```text
+/Users/songminsu/.codex/skills/butti
+```
+
+The GUI remains available for manual use. AI automation should use `butti_ai.py`:
+
+```powershell
+python .\butti_ai.py catch-search Strategy --start-date 2026-04-25 --end-date 2026-04-25 --max-results 30 --output-dir downloads
+python .\butti_ai.py interests-list --output-dir downloads
+python .\butti_ai.py interests-add --from-file downloads\catch_recruits_Strategy_YYYYMMDD_HHMMSS.json --index 2 --output-dir downloads
+python .\butti_ai.py news Samsung --start-date 2026-04-01 --end-date 2026-04-25 --source all --max-results 20 --output-dir downloads
 ```

@@ -7,6 +7,7 @@ from datetime import date, timedelta
 from pathlib import Path
 from tkinter import filedialog, font, messagebox, ttk
 
+from butti_interests import DEFAULT_INTERESTS_FILENAME, interest_key, write_interests
 from crawl_company_news import (
     DEFAULT_MAX_RESULTS as DEFAULT_NEWS_MAX_RESULTS,
     NewsCrawlerError,
@@ -52,6 +53,10 @@ class DownloaderApp(tk.Tk):
         self.batch_worker = None
         self.catch_worker = None
         self.catch_links = {}
+        self.catch_items_by_row = {}
+        self.catch_interested_items = {}
+        self.catch_result_items = []
+        self.catch_showing_interests = False
         self.lookup_tokens = {"reports": 0, "catch": 0, "news": 0, "batch": 0}
         self.lookup_after_ids = {"reports": None, "catch": None, "news": None, "batch": None}
         self.lookup_candidates = {"reports": [], "catch": [], "news": [], "batch": []}
@@ -71,6 +76,7 @@ class DownloaderApp(tk.Tk):
         self.catch_output_var = tk.StringVar(value=str(DEFAULT_OUTPUT_DIR))
         self.catch_start_var = tk.StringVar(value=(date.today() - timedelta(days=30)).isoformat())
         self.catch_end_var = tk.StringVar(value=date.today().isoformat())
+        self.catch_max_results_var = tk.IntVar(value=DEFAULT_MAX_RESULTS)
         self.catch_today_only_var = tk.BooleanVar(value=False)
         self.catch_status_var = tk.StringVar(value="Ready")
 
@@ -310,27 +316,20 @@ class DownloaderApp(tk.Tk):
         form.pack(fill="x")
         form.columnconfigure(1, weight=1)
 
-        ttk.Label(form, text="Company / stock code", style="Field.TLabel").grid(row=0, column=0, sticky="w", pady=(0, 6))
+        ttk.Label(form, text="Title keyword", style="Field.TLabel").grid(row=0, column=0, sticky="w", pady=(0, 6))
         keyword = ttk.Entry(form, textvariable=self.catch_keyword_var, font=self.input_font)
-        keyword.grid(row=1, column=0, columnspan=3, sticky="ew", pady=(0, 4))
-        keyword.bind("<KeyRelease>", lambda event: self._on_lookup_key_release("catch", event))
-        keyword.bind("<Return>", lambda event: self._select_active_company("catch", event))
-        keyword.bind("<Down>", lambda event: self._focus_company_suggestions("catch", event))
+        keyword.grid(row=1, column=0, columnspan=3, sticky="ew", pady=(0, 14))
 
-        self.catch_suggestions = self._create_company_suggestion_list(form, "catch")
-        self.catch_suggestions.grid(row=2, column=0, columnspan=3, sticky="ew", pady=(0, 14))
-        self.catch_suggestions.grid_remove()
+        ttk.Label(form, text="Output folder", style="Field.TLabel").grid(row=2, column=0, sticky="w", pady=(0, 6))
+        ttk.Entry(form, textvariable=self.catch_output_var, font=self.ui_font).grid(row=3, column=0, columnspan=2, sticky="ew", pady=(0, 14), padx=(0, 8))
+        ttk.Button(form, text="Browse", command=self._browse_catch_output).grid(row=3, column=2, sticky="ew", pady=(0, 14))
 
-        ttk.Label(form, text="Output folder", style="Field.TLabel").grid(row=3, column=0, sticky="w", pady=(0, 6))
-        ttk.Entry(form, textvariable=self.catch_output_var, font=self.ui_font).grid(row=4, column=0, columnspan=2, sticky="ew", pady=(0, 14), padx=(0, 8))
-        ttk.Button(form, text="Browse", command=self._browse_catch_output).grid(row=4, column=2, sticky="ew", pady=(0, 14))
-
-        ttk.Label(form, text="Start date", style="Field.TLabel").grid(row=5, column=0, sticky="w", pady=(0, 6))
-        ttk.Label(form, text="End date", style="Field.TLabel").grid(row=5, column=1, sticky="w", pady=(0, 6), padx=(8, 0))
-        ttk.Entry(form, textvariable=self.catch_start_var, font=self.ui_font, width=16).grid(row=6, column=0, sticky="ew", pady=(0, 14), padx=(0, 8))
-        ttk.Entry(form, textvariable=self.catch_end_var, font=self.ui_font, width=16).grid(row=6, column=1, sticky="ew", pady=(0, 14), padx=(8, 8))
+        ttk.Label(form, text="Start date", style="Field.TLabel").grid(row=4, column=0, sticky="w", pady=(0, 6))
+        ttk.Label(form, text="End date", style="Field.TLabel").grid(row=4, column=1, sticky="w", pady=(0, 6), padx=(8, 0))
+        ttk.Entry(form, textvariable=self.catch_start_var, font=self.ui_font, width=16).grid(row=5, column=0, sticky="ew", pady=(0, 14), padx=(0, 8))
+        ttk.Entry(form, textvariable=self.catch_end_var, font=self.ui_font, width=16).grid(row=5, column=1, sticky="ew", pady=(0, 14), padx=(8, 8))
         date_actions = ttk.Frame(form)
-        date_actions.grid(row=6, column=2, sticky="ew", pady=(0, 14))
+        date_actions.grid(row=5, column=2, sticky="ew", pady=(0, 14))
         ttk.Button(date_actions, text="Today", command=self._set_catch_dates_today).pack(side="left")
         ttk.Checkbutton(
             date_actions,
@@ -339,12 +338,26 @@ class DownloaderApp(tk.Tk):
             command=self._sync_catch_today_only,
         ).pack(side="left", padx=(8, 0))
 
-        ttk.Label(form, text=f"Max results: {DEFAULT_MAX_RESULTS}", style="Field.TLabel").grid(row=7, column=0, sticky="w", pady=(0, 18))
+        ttk.Label(form, text="Max results", style="Field.TLabel").grid(row=6, column=0, sticky="w", pady=(0, 6))
+        ttk.Spinbox(
+            form,
+            from_=1,
+            to=10000,
+            textvariable=self.catch_max_results_var,
+            width=10,
+        ).grid(row=7, column=0, sticky="w", pady=(0, 18))
 
         actions = ttk.Frame(parent)
         actions.pack(fill="x", pady=(4, 14))
         self.catch_read_button = ttk.Button(actions, text="Read Once", style="Accent.TButton", command=self._start_catch_once)
         self.catch_read_button.pack(side="left")
+        ttk.Button(actions, text="Add Selected", command=self._add_selected_catch_interest).pack(side="left", padx=(8, 0))
+        self.catch_toggle_view_button = ttk.Button(
+            actions,
+            text="Show Interested Only",
+            command=self._toggle_catch_interest_view,
+        )
+        self.catch_toggle_view_button.pack(side="left", padx=(8, 0))
         ttk.Label(actions, textvariable=self.catch_status_var).pack(side="left", padx=(16, 0))
 
         self.catch_progress = ttk.Progressbar(parent, mode="indeterminate")
@@ -497,7 +510,6 @@ class DownloaderApp(tk.Tk):
         return {
             "batch": self.batch_company_var,
             "reports": self.company_var,
-            "catch": self.catch_keyword_var,
             "news": self.news_company_var,
         }[kind]
 
@@ -505,7 +517,6 @@ class DownloaderApp(tk.Tk):
         return {
             "batch": self.batch_suggestions,
             "reports": self.company_suggestions,
-            "catch": self.catch_suggestions,
             "news": self.news_suggestions,
         }[kind]
 
@@ -513,7 +524,6 @@ class DownloaderApp(tk.Tk):
         return {
             "batch": self.batch_status_var,
             "reports": self.status_var,
-            "catch": self.catch_status_var,
             "news": self.news_status_var,
         }[kind]
 
@@ -522,8 +532,6 @@ class DownloaderApp(tk.Tk):
             self._batch_log(message)
         elif kind == "reports":
             self._log(message)
-        elif kind == "catch":
-            self._catch_log(message)
         else:
             self._news_log(message)
 
@@ -681,6 +689,9 @@ class DownloaderApp(tk.Tk):
         if parse_catch_date(catch_end) < parse_catch_date(catch_start):
             messagebox.showwarning(APP_TITLE, "Catch end date must be the same as or later than start date.")
             return None
+        if self.catch_max_results_var.get() < 1:
+            messagebox.showwarning(APP_TITLE, "Catch max results must be greater than 0.")
+            return None
 
         return {
             "tasks": tasks,
@@ -691,8 +702,10 @@ class DownloaderApp(tk.Tk):
             "naver_end": naver_end,
             "news_start": news_start,
             "news_end": news_end,
+            "catch_keyword": self.catch_keyword_var.get().strip(),
             "catch_start": catch_start,
             "catch_end": catch_end,
+            "catch_max_results": self.catch_max_results_var.get(),
         }
 
     def _start_batch_run(self):
@@ -747,7 +760,10 @@ class DownloaderApp(tk.Tk):
                 elif task == "catch":
                     self.message_queue.put(("batch_log", "Running Catch Recruits..."))
                     result, output_path = self._read_catch_to_file(
-                        keyword=config["company"],
+                        keyword=config["catch_keyword"],
+                        max_results=config["catch_max_results"],
+                        start_date=config["catch_start"],
+                        end_date=config["catch_end"],
                         progress=lambda message: self.message_queue.put(("batch_log", message)),
                     )
                     completed += 1
@@ -902,6 +918,9 @@ class DownloaderApp(tk.Tk):
             return
         if not self._validate_catch_dates():
             return
+        if self.catch_max_results_var.get() < 1:
+            messagebox.showwarning(APP_TITLE, "Max results must be greater than 0.")
+            return
         self._set_catch_running(True)
         self.catch_worker = threading.Thread(target=self._run_catch_once, daemon=True)
         self.catch_worker.start()
@@ -915,7 +934,6 @@ class DownloaderApp(tk.Tk):
 
     def _read_catch_and_save(self):
         keyword = self.catch_keyword_var.get().strip()
-        output_dir = Path(self.catch_output_var.get())
         if self.catch_today_only_var.get():
             start_date = date.today().isoformat()
             end_date = start_date
@@ -926,16 +944,27 @@ class DownloaderApp(tk.Tk):
         def tell(message):
             self.message_queue.put(("catch_log", message))
 
-        result = crawl_catch_recruits(
+        result, output_path = self._read_catch_to_file(
             keyword=keyword,
-            max_results=DEFAULT_MAX_RESULTS,
+            max_results=self.catch_max_results_var.get(),
             start_date=start_date,
             end_date=end_date,
             progress=tell,
         )
+        self.message_queue.put(("catch_result", result, output_path))
+
+    def _read_catch_to_file(self, keyword, max_results, start_date=None, end_date=None, progress=None):
+        output_dir = Path(self.catch_output_var.get())
+        result = crawl_catch_recruits(
+            keyword=keyword,
+            max_results=max_results,
+            start_date=start_date,
+            end_date=end_date,
+            progress=progress,
+        )
         output_path = output_dir / default_catch_output_path(keyword or "all").name
         write_catch_json(result, output_path)
-        self.message_queue.put(("catch_result", result, output_path))
+        return result, output_path
 
     def _validate_catch_dates(self):
         try:
@@ -1029,10 +1058,20 @@ class DownloaderApp(tk.Tk):
         self._catch_log(status)
 
     def _show_catch_result(self, result, output_path):
+        self.catch_result_items = list(result["items"])
+        self.catch_showing_interests = False
+        self._refresh_catch_table(self.catch_result_items)
+        self.catch_toggle_view_button.configure(text="Show Interested Only")
+        message = f"Saved {len(result['items'])} recruit item(s): {Path(output_path).resolve()}"
+        self.catch_status_var.set(message)
+        self._catch_log(message)
+
+    def _refresh_catch_table(self, items):
         self.catch_links = {}
+        self.catch_items_by_row = {}
         for row_id in self.catch_table.get_children():
             self.catch_table.delete(row_id)
-        for item in result["items"]:
+        for item in items:
             row_id = self.catch_table.insert(
                 "",
                 "end",
@@ -1046,9 +1085,59 @@ class DownloaderApp(tk.Tk):
                 ),
             )
             self.catch_links[row_id] = item.get("link", "")
-        message = f"Saved {len(result['items'])} recruit item(s): {Path(output_path).resolve()}"
+            self.catch_items_by_row[row_id] = item
+
+    def _catch_interest_key(self, item):
+        return interest_key(item)
+
+    def _add_selected_catch_interest(self):
+        row_ids = self.catch_table.selection()
+        if not row_ids:
+            messagebox.showwarning(APP_TITLE, "Select one or more Catch recruit rows first.")
+            return
+        added = 0
+        for row_id in row_ids:
+            item = self.catch_items_by_row.get(row_id)
+            if not item:
+                continue
+            key = self._catch_interest_key(item)
+            if not key or key in self.catch_interested_items:
+                continue
+            self.catch_interested_items[key] = item
+            added += 1
+        if self.catch_showing_interests:
+            self._refresh_catch_table(list(self.catch_interested_items.values()))
+        total = len(self.catch_interested_items)
+        if added:
+            try:
+                output_path = self._write_catch_interests()
+            except OSError as exc:
+                messagebox.showerror(APP_TITLE, f"Failed to save interested recruits: {exc}")
+                self._catch_log(f"ERROR: Failed to save interested recruits: {exc}")
+                return
+            message = f"Interested: {total} item(s). Added {added}. Auto-saved: {output_path.resolve()}"
+        else:
+            message = f"Interested: {total} item(s). Added {added}."
         self.catch_status_var.set(message)
         self._catch_log(message)
+
+    def _toggle_catch_interest_view(self):
+        self.catch_showing_interests = not self.catch_showing_interests
+        if self.catch_showing_interests:
+            items = list(self.catch_interested_items.values())
+            self._refresh_catch_table(items)
+            self.catch_toggle_view_button.configure(text="Show All Results")
+            self.catch_status_var.set(f"Showing interested recruits: {len(items)} item(s).")
+            self._catch_log(f"Showing interested recruits: {len(items)} item(s).")
+        else:
+            self._refresh_catch_table(self.catch_result_items)
+            self.catch_toggle_view_button.configure(text="Show Interested Only")
+            self.catch_status_var.set(f"Showing all recruit results: {len(self.catch_result_items)} item(s).")
+            self._catch_log(f"Showing all recruit results: {len(self.catch_result_items)} item(s).")
+
+    def _write_catch_interests(self):
+        output_path = Path(self.catch_output_var.get()) / DEFAULT_INTERESTS_FILENAME
+        return write_interests(list(self.catch_interested_items.values()), output_path)
 
     def _open_selected_catch_recruit(self, event=None):
         row_id = self.catch_table.identify_row(event.y) if event else ""
@@ -1116,4 +1205,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

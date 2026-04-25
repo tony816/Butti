@@ -4,6 +4,7 @@ __pycache__/
 corpCode.xml
 downloads/
 run_downloader.log
+run_downloader_mac.log
 _tmp_pdf_test/
 catch_recruits_*.json
 news_*.json
