@@ -10,7 +10,9 @@ from crawl_catch_recruits import (
     deduplicate_recruits,
     get_recruit_rows,
     get_total_count,
+    is_within_date_range,
     normalize_recruit,
+    parse_date,
     write_json,
 )
 
@@ -64,6 +66,37 @@ class CatchRecruitCrawlerTests(unittest.TestCase):
         self.assertEqual(result["keyword"], "삼성")
         self.assertEqual(result["total_count"], 1)
         self.assertEqual(len(result["items"]), 1)
+
+    def test_crawl_catch_recruits_filters_by_open_date(self):
+        def fetch(_url, params=None):
+            return {
+                "intTotalRecordCount": 2,
+                "recruitData": [
+                    {
+                        "RecruitID": "1",
+                        "CompName": "A",
+                        "RecruitTitle": "In range",
+                        "ApplyStartDatetime": "2026-04-25T00:00:00.000Z",
+                    },
+                    {
+                        "RecruitID": "2",
+                        "CompName": "B",
+                        "RecruitTitle": "Too old",
+                        "ApplyStartDatetime": "2026-04-20T00:00:00.000Z",
+                    },
+                ],
+            }
+
+        result = crawl_catch_recruits("A", max_results=5, start_date="2026-04-25", end_date="2026-04-25", fetch=fetch)
+        self.assertEqual(result["start_date"], "2026-04-25")
+        self.assertEqual(result["end_date"], "2026-04-25")
+        self.assertEqual([item["recruit_id"] for item in result["items"]], ["1"])
+
+    def test_date_helpers_reject_bad_ranges(self):
+        self.assertEqual(parse_date("2026-04-25").isoformat(), "2026-04-25")
+        self.assertTrue(is_within_date_range({"start_date": "2026-04-25T00:00:00.000Z"}, parse_date("2026-04-25"), parse_date("2026-04-25")))
+        with self.assertRaises(CatchRecruitError):
+            crawl_catch_recruits("A", start_date="2026-04-26", end_date="2026-04-25")
 
     def test_crawl_catch_recruits_rejects_bad_limits(self):
         with self.assertRaises(CatchRecruitError):

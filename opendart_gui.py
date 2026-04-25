@@ -5,7 +5,7 @@ import tkinter as tk
 import webbrowser
 from datetime import date, timedelta
 from pathlib import Path
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, font, messagebox, ttk
 
 from crawl_company_news import (
     DEFAULT_MAX_RESULTS as DEFAULT_NEWS_MAX_RESULTS,
@@ -21,6 +21,7 @@ from crawl_catch_recruits import (
     CatchRecruitError,
     crawl_catch_recruits,
     default_output_path as default_catch_output_path,
+    parse_date as parse_catch_date,
     write_json as write_catch_json,
 )
 from download_business_reports import (
@@ -35,6 +36,8 @@ from download_business_reports import (
 
 
 APP_TITLE = "OpenDART, Catch, and News Reader"
+FONT_FAMILY = "Malgun Gothic"
+MONO_FONT_FAMILY = "Malgun Gothic"
 
 
 class DownloaderApp(tk.Tk):
@@ -49,10 +52,10 @@ class DownloaderApp(tk.Tk):
         self.catch_worker = None
         self.catch_stop_event = threading.Event()
         self.catch_links = {}
-        self.company_lookup_token = 0
-        self.company_lookup_after_id = None
-        self.company_candidates = []
-        self.selected_corp = None
+        self.lookup_tokens = {"reports": 0, "catch": 0, "news": 0}
+        self.lookup_after_ids = {"reports": None, "catch": None, "news": None}
+        self.lookup_candidates = {"reports": [], "catch": [], "news": []}
+        self.selected_corps = {"reports": None, "catch": None, "news": None}
 
         self.company_var = tk.StringVar()
         self.report_source_var = tk.StringVar(value="OpenDART business reports")
@@ -68,6 +71,9 @@ class DownloaderApp(tk.Tk):
         self.catch_output_var = tk.StringVar(value=str(DEFAULT_OUTPUT_DIR))
         self.catch_max_results_var = tk.IntVar(value=DEFAULT_MAX_RESULTS)
         self.catch_interval_var = tk.DoubleVar(value=DEFAULT_INTERVAL_MINUTES)
+        self.catch_start_var = tk.StringVar(value=(date.today() - timedelta(days=30)).isoformat())
+        self.catch_end_var = tk.StringVar(value=date.today().isoformat())
+        self.catch_today_only_var = tk.BooleanVar(value=False)
         self.catch_status_var = tk.StringVar(value="Ready")
 
         self.news_company_var = tk.StringVar()
@@ -86,22 +92,39 @@ class DownloaderApp(tk.Tk):
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
     def _configure_style(self):
+        self.ui_font = font.Font(family=FONT_FAMILY, size=10)
+        self.ui_font_bold = font.Font(family=FONT_FAMILY, size=10, weight="bold")
+        self.field_font = font.Font(family=FONT_FAMILY, size=9, weight="bold")
+        self.title_font = font.Font(family=FONT_FAMILY, size=18, weight="bold")
+        self.subtitle_font = font.Font(family=FONT_FAMILY, size=10)
+        self.input_font = font.Font(family=FONT_FAMILY, size=11)
+        self.log_font = font.Font(family=MONO_FONT_FAMILY, size=10)
+        self.option_add("*Font", self.ui_font)
+        self.option_add("*Entry.Font", self.input_font)
+        self.option_add("*Text.Font", self.log_font)
+        self.option_add("*Listbox.Font", self.ui_font)
+
         style = ttk.Style(self)
         style.theme_use("clam")
         style.configure("TFrame", background="#f6f7f9")
         style.configure("Header.TFrame", background="#17202a")
-        style.configure("Title.TLabel", background="#17202a", foreground="#ffffff", font=("Segoe UI", 18, "bold"))
-        style.configure("Subtitle.TLabel", background="#17202a", foreground="#b9c2cf", font=("Segoe UI", 10))
-        style.configure("TLabel", background="#f6f7f9", foreground="#222831", font=("Segoe UI", 10))
-        style.configure("Field.TLabel", background="#f6f7f9", foreground="#46515f", font=("Segoe UI", 9, "bold"))
-        style.configure("TButton", font=("Segoe UI", 10), padding=(12, 8))
-        style.configure("Accent.TButton", background="#0f766e", foreground="#ffffff", font=("Segoe UI", 10, "bold"))
-        style.configure("Stop.TButton", background="#b91c1c", foreground="#ffffff", font=("Segoe UI", 10, "bold"))
+        style.configure("Title.TLabel", background="#17202a", foreground="#ffffff", font=self.title_font)
+        style.configure("Subtitle.TLabel", background="#17202a", foreground="#b9c2cf", font=self.subtitle_font)
+        style.configure("TLabel", background="#f6f7f9", foreground="#222831", font=self.ui_font)
+        style.configure("Field.TLabel", background="#f6f7f9", foreground="#46515f", font=self.field_font)
+        style.configure("TButton", font=self.ui_font, padding=(12, 8))
+        style.configure("Accent.TButton", background="#0f766e", foreground="#ffffff", font=self.ui_font_bold)
+        style.configure("Stop.TButton", background="#b91c1c", foreground="#ffffff", font=self.ui_font_bold)
+        style.configure("TEntry", font=self.input_font)
+        style.configure("TCombobox", font=self.ui_font)
+        style.configure("TSpinbox", font=self.ui_font)
+        style.configure("Treeview", font=self.ui_font, rowheight=25)
+        style.configure("Treeview.Heading", font=self.field_font)
         style.map("Accent.TButton", background=[("active", "#115e59"), ("disabled", "#94a3b8")])
         style.map("Stop.TButton", background=[("active", "#991b1b"), ("disabled", "#94a3b8")])
         style.configure("Horizontal.TProgressbar", background="#0f766e", troughcolor="#d8dee8")
         style.configure("TNotebook", background="#f6f7f9", borderwidth=0)
-        style.configure("TNotebook.Tab", font=("Segoe UI", 10), padding=(14, 8))
+        style.configure("TNotebook.Tab", font=self.ui_font, padding=(14, 8))
 
     def _build_layout(self):
         header = ttk.Frame(self, style="Header.TFrame", padding=(24, 22))
@@ -138,17 +161,17 @@ class DownloaderApp(tk.Tk):
             textvariable=self.report_source_var,
             values=("OpenDART business reports", "Naver Finance research"),
             state="readonly",
-            font=("Segoe UI", 10),
+            font=self.ui_font,
         )
         self.report_source_combo.grid(row=1, column=0, columnspan=3, sticky="ew", pady=(0, 14))
         self.report_source_combo.bind("<<ComboboxSelected>>", lambda _event: self._sync_report_source_fields())
 
         ttk.Label(form, text="Company / stock code", style="Field.TLabel").grid(row=2, column=0, sticky="w", pady=(0, 6))
-        company = ttk.Entry(form, textvariable=self.company_var, font=("Segoe UI", 11))
+        company = ttk.Entry(form, textvariable=self.company_var, font=self.input_font)
         company.grid(row=3, column=0, columnspan=3, sticky="ew", pady=(0, 4))
         company.bind("<KeyRelease>", self._on_company_key_release)
-        company.bind("<Return>", self._select_active_company)
-        company.bind("<Down>", self._focus_company_suggestions)
+        company.bind("<Return>", lambda event: self._select_active_company("reports", event))
+        company.bind("<Down>", lambda event: self._focus_company_suggestions("reports", event))
         company.focus()
 
         self.company_suggestions = tk.Listbox(
@@ -162,32 +185,32 @@ class DownloaderApp(tk.Tk):
             fg="#202124",
             selectbackground="#edf2f7",
             selectforeground="#111827",
-            font=("Segoe UI", 10),
+            font=self.ui_font,
         )
         self.company_suggestions.grid(row=4, column=0, columnspan=3, sticky="ew", pady=(0, 14))
         self.company_suggestions.grid_remove()
-        self.company_suggestions.bind("<ButtonRelease-1>", self._select_active_company)
-        self.company_suggestions.bind("<Return>", self._select_active_company)
+        self.company_suggestions.bind("<ButtonRelease-1>", lambda event: self._select_active_company("reports", event))
+        self.company_suggestions.bind("<Return>", lambda event: self._select_active_company("reports", event))
         self.company_suggestions.bind("<Escape>", lambda _event: self._hide_company_suggestions())
 
         self.api_key_label = ttk.Label(form, text=".env API key", style="Field.TLabel")
         self.api_key_label.grid(row=5, column=0, sticky="w", pady=(0, 6))
-        self.api_key_entry = ttk.Entry(form, textvariable=self.api_key_var, show="*", font=("Segoe UI", 10))
+        self.api_key_entry = ttk.Entry(form, textvariable=self.api_key_var, show="*", font=self.ui_font)
         self.api_key_entry.grid(row=6, column=0, columnspan=2, sticky="ew", pady=(0, 14), padx=(0, 8))
         self.save_env_button = ttk.Button(form, text="Save .env", command=self._save_env)
         self.save_env_button.grid(row=6, column=2, sticky="ew", pady=(0, 14))
 
         ttk.Label(form, text="Output folder", style="Field.TLabel").grid(row=7, column=0, sticky="w", pady=(0, 6))
-        ttk.Entry(form, textvariable=self.output_var, font=("Segoe UI", 10)).grid(row=8, column=0, columnspan=2, sticky="ew", pady=(0, 14), padx=(0, 8))
+        ttk.Entry(form, textvariable=self.output_var, font=self.ui_font).grid(row=8, column=0, columnspan=2, sticky="ew", pady=(0, 14), padx=(0, 8))
         ttk.Button(form, text="Browse", command=self._browse_output).grid(row=8, column=2, sticky="ew", pady=(0, 14))
 
         self.naver_start_label = ttk.Label(form, text="Naver start date", style="Field.TLabel")
         self.naver_start_label.grid(row=9, column=0, sticky="w", pady=(0, 6))
         self.naver_end_label = ttk.Label(form, text="Naver end date", style="Field.TLabel")
         self.naver_end_label.grid(row=9, column=1, sticky="w", pady=(0, 6), padx=(8, 0))
-        self.naver_start_entry = ttk.Entry(form, textvariable=self.naver_start_var, font=("Segoe UI", 10), width=16)
+        self.naver_start_entry = ttk.Entry(form, textvariable=self.naver_start_var, font=self.ui_font, width=16)
         self.naver_start_entry.grid(row=10, column=0, sticky="ew", pady=(0, 14), padx=(0, 8))
-        self.naver_end_entry = ttk.Entry(form, textvariable=self.naver_end_var, font=("Segoe UI", 10), width=16)
+        self.naver_end_entry = ttk.Entry(form, textvariable=self.naver_end_var, font=self.ui_font, width=16)
         self.naver_end_entry.grid(row=10, column=1, sticky="ew", pady=(0, 14), padx=(8, 8))
 
         self.report_count_label = ttk.Label(form, text="Reports", style="Field.TLabel")
@@ -206,7 +229,7 @@ class DownloaderApp(tk.Tk):
 
         log_frame = ttk.Frame(parent)
         log_frame.pack(fill="both", expand=True)
-        self.log = tk.Text(log_frame, height=12, wrap="word", relief="flat", bg="#ffffff", fg="#1f2933", font=("Consolas", 10), padx=12, pady=10)
+        self.log = tk.Text(log_frame, height=12, wrap="word", relief="flat", bg="#ffffff", fg="#1f2933", font=self.log_font, padx=12, pady=10)
         scrollbar = ttk.Scrollbar(log_frame, orient="vertical", command=self.log.yview)
         self.log.configure(yscrollcommand=scrollbar.set)
         self.log.pack(side="left", fill="both", expand=True)
@@ -218,18 +241,39 @@ class DownloaderApp(tk.Tk):
         form.columnconfigure(1, weight=1)
 
         ttk.Label(form, text="Keyword / company", style="Field.TLabel").grid(row=0, column=0, sticky="w", pady=(0, 6))
-        keyword = ttk.Entry(form, textvariable=self.catch_keyword_var, font=("Segoe UI", 11))
-        keyword.grid(row=1, column=0, columnspan=3, sticky="ew", pady=(0, 14))
+        keyword = ttk.Entry(form, textvariable=self.catch_keyword_var, font=self.input_font)
+        keyword.grid(row=1, column=0, columnspan=3, sticky="ew", pady=(0, 4))
+        keyword.bind("<KeyRelease>", lambda event: self._on_lookup_key_release("catch", event))
+        keyword.bind("<Return>", lambda event: self._select_active_company("catch", event))
+        keyword.bind("<Down>", lambda event: self._focus_company_suggestions("catch", event))
 
-        ttk.Label(form, text="Output folder", style="Field.TLabel").grid(row=2, column=0, sticky="w", pady=(0, 6))
-        ttk.Entry(form, textvariable=self.catch_output_var, font=("Segoe UI", 10)).grid(row=3, column=0, columnspan=2, sticky="ew", pady=(0, 14), padx=(0, 8))
-        ttk.Button(form, text="Browse", command=self._browse_catch_output).grid(row=3, column=2, sticky="ew", pady=(0, 14))
+        self.catch_suggestions = self._create_company_suggestion_list(form, "catch")
+        self.catch_suggestions.grid(row=2, column=0, columnspan=3, sticky="ew", pady=(0, 14))
+        self.catch_suggestions.grid_remove()
 
-        ttk.Label(form, text="Max results", style="Field.TLabel").grid(row=4, column=0, sticky="w", pady=(0, 6))
-        ttk.Spinbox(form, from_=1, to=300, textvariable=self.catch_max_results_var, width=10).grid(row=5, column=0, sticky="w", pady=(0, 14))
+        ttk.Label(form, text="Output folder", style="Field.TLabel").grid(row=3, column=0, sticky="w", pady=(0, 6))
+        ttk.Entry(form, textvariable=self.catch_output_var, font=self.ui_font).grid(row=4, column=0, columnspan=2, sticky="ew", pady=(0, 14), padx=(0, 8))
+        ttk.Button(form, text="Browse", command=self._browse_catch_output).grid(row=4, column=2, sticky="ew", pady=(0, 14))
 
-        ttk.Label(form, text="Interval minutes", style="Field.TLabel").grid(row=4, column=1, sticky="w", pady=(0, 6))
-        ttk.Spinbox(form, from_=1, to=1440, increment=5, textvariable=self.catch_interval_var, width=12).grid(row=5, column=1, sticky="w", pady=(0, 14))
+        ttk.Label(form, text="Start date", style="Field.TLabel").grid(row=5, column=0, sticky="w", pady=(0, 6))
+        ttk.Label(form, text="End date", style="Field.TLabel").grid(row=5, column=1, sticky="w", pady=(0, 6), padx=(8, 0))
+        ttk.Entry(form, textvariable=self.catch_start_var, font=self.ui_font, width=16).grid(row=6, column=0, sticky="ew", pady=(0, 14), padx=(0, 8))
+        ttk.Entry(form, textvariable=self.catch_end_var, font=self.ui_font, width=16).grid(row=6, column=1, sticky="ew", pady=(0, 14), padx=(8, 8))
+        date_actions = ttk.Frame(form)
+        date_actions.grid(row=6, column=2, sticky="ew", pady=(0, 14))
+        ttk.Button(date_actions, text="Today", command=self._set_catch_dates_today).pack(side="left")
+        ttk.Checkbutton(
+            date_actions,
+            text="Today only",
+            variable=self.catch_today_only_var,
+            command=self._sync_catch_today_only,
+        ).pack(side="left", padx=(8, 0))
+
+        ttk.Label(form, text="Max results", style="Field.TLabel").grid(row=7, column=0, sticky="w", pady=(0, 6))
+        ttk.Spinbox(form, from_=1, to=300, textvariable=self.catch_max_results_var, width=10).grid(row=8, column=0, sticky="w", pady=(0, 14))
+
+        ttk.Label(form, text="Interval minutes", style="Field.TLabel").grid(row=7, column=1, sticky="w", pady=(0, 6))
+        ttk.Spinbox(form, from_=1, to=1440, increment=5, textvariable=self.catch_interval_var, width=12).grid(row=8, column=1, sticky="w", pady=(0, 14))
 
         actions = ttk.Frame(parent)
         actions.pack(fill="x", pady=(4, 14))
@@ -245,16 +289,17 @@ class DownloaderApp(tk.Tk):
         self.catch_progress = ttk.Progressbar(parent, mode="indeterminate")
         self.catch_progress.pack(fill="x", pady=(0, 14))
 
-        columns = ("company", "title", "deadline", "career", "location")
+        columns = ("company", "title", "start_date", "deadline", "career", "location")
         self.catch_table = ttk.Treeview(parent, columns=columns, show="headings", height=9)
         headings = {
             "company": "Company",
             "title": "Title",
+            "start_date": "Opened",
             "deadline": "Deadline",
             "career": "Career",
             "location": "Location",
         }
-        widths = {"company": 140, "title": 320, "deadline": 150, "career": 100, "location": 90}
+        widths = {"company": 130, "title": 290, "start_date": 140, "deadline": 140, "career": 90, "location": 80}
         for column in columns:
             self.catch_table.heading(column, text=headings[column])
             self.catch_table.column(column, width=widths[column], anchor="w")
@@ -263,7 +308,7 @@ class DownloaderApp(tk.Tk):
 
         log_frame = ttk.Frame(parent)
         log_frame.pack(fill="both", expand=True)
-        self.catch_log = tk.Text(log_frame, height=8, wrap="word", relief="flat", bg="#ffffff", fg="#1f2933", font=("Consolas", 10), padx=12, pady=10)
+        self.catch_log = tk.Text(log_frame, height=8, wrap="word", relief="flat", bg="#ffffff", fg="#1f2933", font=self.log_font, padx=12, pady=10)
         scrollbar = ttk.Scrollbar(log_frame, orient="vertical", command=self.catch_log.yview)
         self.catch_log.configure(yscrollcommand=scrollbar.set)
         self.catch_log.pack(side="left", fill="both", expand=True)
@@ -275,28 +320,35 @@ class DownloaderApp(tk.Tk):
         form.columnconfigure(1, weight=1)
 
         ttk.Label(form, text="Company", style="Field.TLabel").grid(row=0, column=0, sticky="w", pady=(0, 6))
-        company = ttk.Entry(form, textvariable=self.news_company_var, font=("Segoe UI", 11))
-        company.grid(row=1, column=0, columnspan=3, sticky="ew", pady=(0, 14))
+        company = ttk.Entry(form, textvariable=self.news_company_var, font=self.input_font)
+        company.grid(row=1, column=0, columnspan=3, sticky="ew", pady=(0, 4))
+        company.bind("<KeyRelease>", lambda event: self._on_lookup_key_release("news", event))
+        company.bind("<Return>", lambda event: self._select_active_company("news", event))
+        company.bind("<Down>", lambda event: self._focus_company_suggestions("news", event))
 
-        ttk.Label(form, text="Start date", style="Field.TLabel").grid(row=2, column=0, sticky="w", pady=(0, 6))
-        ttk.Label(form, text="End date", style="Field.TLabel").grid(row=2, column=1, sticky="w", pady=(0, 6), padx=(8, 0))
-        ttk.Label(form, text="Source", style="Field.TLabel").grid(row=2, column=2, sticky="w", pady=(0, 6), padx=(8, 0))
-        ttk.Entry(form, textvariable=self.news_start_var, font=("Segoe UI", 10), width=16).grid(row=3, column=0, sticky="ew", pady=(0, 14), padx=(0, 8))
-        ttk.Entry(form, textvariable=self.news_end_var, font=("Segoe UI", 10), width=16).grid(row=3, column=1, sticky="ew", pady=(0, 14), padx=(8, 8))
+        self.news_suggestions = self._create_company_suggestion_list(form, "news")
+        self.news_suggestions.grid(row=2, column=0, columnspan=3, sticky="ew", pady=(0, 14))
+        self.news_suggestions.grid_remove()
+
+        ttk.Label(form, text="Start date", style="Field.TLabel").grid(row=3, column=0, sticky="w", pady=(0, 6))
+        ttk.Label(form, text="End date", style="Field.TLabel").grid(row=3, column=1, sticky="w", pady=(0, 6), padx=(8, 0))
+        ttk.Label(form, text="Source", style="Field.TLabel").grid(row=3, column=2, sticky="w", pady=(0, 6), padx=(8, 0))
+        ttk.Entry(form, textvariable=self.news_start_var, font=self.ui_font, width=16).grid(row=4, column=0, sticky="ew", pady=(0, 14), padx=(0, 8))
+        ttk.Entry(form, textvariable=self.news_end_var, font=self.ui_font, width=16).grid(row=4, column=1, sticky="ew", pady=(0, 14), padx=(8, 8))
         ttk.Combobox(
             form,
             textvariable=self.news_source_var,
             values=("all", "naver", "google"),
             state="readonly",
-            font=("Segoe UI", 10),
+            font=self.ui_font,
             width=12,
-        ).grid(row=3, column=2, sticky="ew", pady=(0, 14))
+        ).grid(row=4, column=2, sticky="ew", pady=(0, 14))
 
-        ttk.Label(form, text="Max results per source", style="Field.TLabel").grid(row=4, column=0, sticky="w", pady=(0, 6))
-        ttk.Label(form, text="JSON output file (optional)", style="Field.TLabel").grid(row=4, column=1, columnspan=2, sticky="w", pady=(0, 6), padx=(8, 0))
-        ttk.Spinbox(form, from_=1, to=200, textvariable=self.news_max_results_var, width=10).grid(row=5, column=0, sticky="w", pady=(0, 14))
-        ttk.Entry(form, textvariable=self.news_output_var, font=("Segoe UI", 10)).grid(row=5, column=1, sticky="ew", pady=(0, 14), padx=(8, 8))
-        ttk.Button(form, text="Browse", command=self._browse_news_output).grid(row=5, column=2, sticky="ew", pady=(0, 14))
+        ttk.Label(form, text="Max results per source", style="Field.TLabel").grid(row=5, column=0, sticky="w", pady=(0, 6))
+        ttk.Label(form, text="JSON output file (optional)", style="Field.TLabel").grid(row=5, column=1, columnspan=2, sticky="w", pady=(0, 6), padx=(8, 0))
+        ttk.Spinbox(form, from_=1, to=200, textvariable=self.news_max_results_var, width=10).grid(row=6, column=0, sticky="w", pady=(0, 14))
+        ttk.Entry(form, textvariable=self.news_output_var, font=self.ui_font).grid(row=6, column=1, sticky="ew", pady=(0, 14), padx=(8, 8))
+        ttk.Button(form, text="Browse", command=self._browse_news_output).grid(row=6, column=2, sticky="ew", pady=(0, 14))
 
         actions = ttk.Frame(parent)
         actions.pack(fill="x", pady=(4, 14))
@@ -318,7 +370,7 @@ class DownloaderApp(tk.Tk):
 
         log_frame = ttk.Frame(parent)
         log_frame.pack(fill="both", expand=True)
-        self.news_log = tk.Text(log_frame, height=8, wrap="word", relief="flat", bg="#ffffff", fg="#1f2933", font=("Consolas", 10), padx=12, pady=10)
+        self.news_log = tk.Text(log_frame, height=8, wrap="word", relief="flat", bg="#ffffff", fg="#1f2933", font=self.log_font, padx=12, pady=10)
         scrollbar = ttk.Scrollbar(log_frame, orient="vertical", command=self.news_log.yview)
         self.news_log.configure(yscrollcommand=scrollbar.set)
         self.news_log.pack(side="left", fill="both", expand=True)
@@ -352,72 +404,136 @@ class DownloaderApp(tk.Tk):
         if selected:
             self.news_output_var.set(selected)
 
+    def _set_catch_dates_today(self):
+        today = date.today().isoformat()
+        self.catch_start_var.set(today)
+        self.catch_end_var.set(today)
+
+    def _sync_catch_today_only(self):
+        if self.catch_today_only_var.get():
+            self._set_catch_dates_today()
+
+    def _create_company_suggestion_list(self, parent, kind):
+        listbox = tk.Listbox(
+            parent,
+            height=6,
+            activestyle="none",
+            borderwidth=1,
+            highlightthickness=0,
+            relief="solid",
+            bg="#ffffff",
+            fg="#202124",
+            selectbackground="#edf2f7",
+            selectforeground="#111827",
+            font=self.ui_font,
+        )
+        listbox.bind("<ButtonRelease-1>", lambda event: self._select_active_company(kind, event))
+        listbox.bind("<Return>", lambda event: self._select_active_company(kind, event))
+        listbox.bind("<Escape>", lambda _event: self._hide_company_suggestions(kind))
+        return listbox
+
+    def _lookup_var(self, kind):
+        return {
+            "reports": self.company_var,
+            "catch": self.catch_keyword_var,
+            "news": self.news_company_var,
+        }[kind]
+
+    def _lookup_listbox(self, kind):
+        return {
+            "reports": self.company_suggestions,
+            "catch": self.catch_suggestions,
+            "news": self.news_suggestions,
+        }[kind]
+
+    def _lookup_status_var(self, kind):
+        return {
+            "reports": self.status_var,
+            "catch": self.catch_status_var,
+            "news": self.news_status_var,
+        }[kind]
+
+    def _lookup_log(self, kind, message):
+        if kind == "reports":
+            self._log(message)
+        elif kind == "catch":
+            self._catch_log(message)
+        else:
+            self._news_log(message)
+
     def _on_company_key_release(self, event):
+        return self._on_lookup_key_release("reports", event)
+
+    def _on_lookup_key_release(self, kind, event):
         if event.keysym in {"Up", "Down", "Return", "Escape"}:
             return
-        self.selected_corp = None
-        if self.company_lookup_after_id:
-            self.after_cancel(self.company_lookup_after_id)
-        self.company_lookup_after_id = self.after(250, self._start_company_lookup)
+        self.selected_corps[kind] = None
+        if self.lookup_after_ids[kind]:
+            self.after_cancel(self.lookup_after_ids[kind])
+        self.lookup_after_ids[kind] = self.after(250, lambda: self._start_company_lookup(kind))
 
-    def _start_company_lookup(self):
-        self.company_lookup_after_id = None
-        query = self.company_var.get().strip()
+    def _start_company_lookup(self, kind="reports"):
+        self.lookup_after_ids[kind] = None
+        query = self._lookup_var(kind).get().strip()
         api_key = self.api_key_var.get().strip() or get_configured_api_key()
         if len(query) < 1:
-            self._hide_company_suggestions()
+            self._hide_company_suggestions(kind)
             return
-        self.company_lookup_token += 1
-        token = self.company_lookup_token
-        self.status_var.set("Searching companies...")
-        threading.Thread(target=self._run_company_lookup, args=(token, query, api_key), daemon=True).start()
+        self.lookup_tokens[kind] += 1
+        token = self.lookup_tokens[kind]
+        self._lookup_status_var(kind).set("Searching companies...")
+        threading.Thread(target=self._run_company_lookup, args=(kind, token, query, api_key), daemon=True).start()
 
-    def _run_company_lookup(self, token, query, api_key):
+    def _run_company_lookup(self, kind, token, query, api_key):
         try:
             candidates = search_companies(api_key, query, limit=10)
-            self.message_queue.put(("company_suggestions", token, query, candidates))
+            self.message_queue.put(("company_suggestions", kind, token, query, candidates))
         except Exception as exc:
-            self.message_queue.put(("company_suggestions_error", token, exc))
+            self.message_queue.put(("company_suggestions_error", kind, token, exc))
 
-    def _show_company_suggestions(self, candidates):
-        self.company_candidates = candidates
-        self.company_suggestions.delete(0, "end")
+    def _show_company_suggestions(self, kind, candidates):
+        listbox = self._lookup_listbox(kind)
+        self.lookup_candidates[kind] = candidates
+        listbox.delete(0, "end")
         for corp in candidates:
             stock = corp["stock_code"] or "unlisted"
-            self.company_suggestions.insert("end", f"  {corp['corp_name']}    {stock}    {corp['corp_code']}")
+            listbox.insert("end", f"  {corp['corp_name']}    {stock}    {corp['corp_code']}")
         if candidates:
-            self.company_suggestions.selection_clear(0, "end")
-            self.company_suggestions.activate(0)
-            self.company_suggestions.grid()
+            listbox.selection_clear(0, "end")
+            listbox.activate(0)
+            listbox.grid()
         else:
-            self._hide_company_suggestions()
+            self._hide_company_suggestions(kind)
 
-    def _hide_company_suggestions(self):
-        self.company_suggestions.delete(0, "end")
-        self.company_suggestions.grid_remove()
-        self.company_candidates = []
+    def _hide_company_suggestions(self, kind="reports"):
+        listbox = self._lookup_listbox(kind)
+        listbox.delete(0, "end")
+        listbox.grid_remove()
+        self.lookup_candidates[kind] = []
 
-    def _focus_company_suggestions(self, _event=None):
-        if self.company_candidates:
-            self.company_suggestions.focus_set()
-            self.company_suggestions.selection_set(0)
-            self.company_suggestions.activate(0)
+    def _focus_company_suggestions(self, kind="reports", _event=None):
+        listbox = self._lookup_listbox(kind)
+        if self.lookup_candidates[kind]:
+            listbox.focus_set()
+            listbox.selection_set(0)
+            listbox.activate(0)
             return "break"
         return None
 
-    def _select_active_company(self, _event=None):
-        if not self.company_candidates:
+    def _select_active_company(self, kind="reports", _event=None):
+        candidates = self.lookup_candidates[kind]
+        listbox = self._lookup_listbox(kind)
+        if not candidates:
             return None
-        selection = self.company_suggestions.curselection()
-        index = selection[0] if selection else self.company_suggestions.index("active")
-        if index < 0 or index >= len(self.company_candidates):
+        selection = listbox.curselection()
+        index = selection[0] if selection else listbox.index("active")
+        if index < 0 or index >= len(candidates):
             index = 0
-        self.selected_corp = self.company_candidates[index]
-        self.company_var.set(self.selected_corp["corp_name"])
-        self._hide_company_suggestions()
-        self.status_var.set(
-            f"Selected {self.selected_corp['corp_name']} / {self.selected_corp['stock_code'] or 'unlisted'}"
-        )
+        selected = candidates[index]
+        self.selected_corps[kind] = selected
+        self._lookup_var(kind).set(selected["corp_name"])
+        self._hide_company_suggestions(kind)
+        self._lookup_status_var(kind).set(f"Selected {selected['corp_name']} / {selected['stock_code'] or 'unlisted'}")
         return "break"
 
     def _selected_report_source(self):
@@ -425,8 +541,8 @@ class DownloaderApp(tk.Tk):
 
     def _sync_report_source_fields(self):
         if self._selected_report_source() == "naver":
-            self.selected_corp = None
-            self._hide_company_suggestions()
+            self.selected_corps["reports"] = None
+            self._hide_company_suggestions("reports")
             self.api_key_label.configure(text=".env API key (used for company suggestions)")
             self.api_key_entry.state(["disabled"])
             self.save_env_button.state(["disabled"])
@@ -455,11 +571,11 @@ class DownloaderApp(tk.Tk):
         if source == "dart" and not api_key:
             messagebox.showwarning(APP_TITLE, "Enter an API key or save it in .env.")
             return
-        if not self.selected_corp:
+        if not self.selected_corps["reports"]:
             messagebox.showwarning(APP_TITLE, "Choose a company from the search suggestions first.")
             return
 
-        self._hide_company_suggestions()
+        self._hide_company_suggestions("reports")
         self.download_button.state(["disabled"])
         self.report_source_combo.state(["disabled"])
         self.progress.start(12)
@@ -481,7 +597,7 @@ class DownloaderApp(tk.Tk):
                 self.naver_start_var.get().strip(),
                 self.naver_end_var.get().strip(),
                 Path(self.output_var.get()),
-                self.selected_corp,
+                self.selected_corps["reports"],
             ),
             daemon=True,
         )
@@ -518,6 +634,9 @@ class DownloaderApp(tk.Tk):
         if not company:
             messagebox.showwarning(APP_TITLE, "Enter a company name.")
             return
+        if not self.selected_corps["news"]:
+            messagebox.showwarning(APP_TITLE, "Choose a company from the search suggestions first.")
+            return
         try:
             start_date = parse_news_date(self.news_start_var.get().strip())
             end_date = parse_news_date(self.news_end_var.get().strip())
@@ -532,6 +651,7 @@ class DownloaderApp(tk.Tk):
         output_text = self.news_output_var.get().strip()
         output_path = Path(output_text) if output_text else default_news_output_path(company, start_date, end_date)
 
+        self._hide_company_suggestions("news")
         self.news_button.state(["disabled"])
         self.news_progress.start(12)
         self.news_status_var.set("Working")
@@ -562,6 +682,12 @@ class DownloaderApp(tk.Tk):
     def _start_catch_once(self):
         if self.catch_worker and self.catch_worker.is_alive():
             return
+        if not self.selected_corps["catch"]:
+            messagebox.showwarning(APP_TITLE, "Choose a company from the search suggestions first.")
+            return
+        if not self._validate_catch_dates():
+            return
+        self._hide_company_suggestions("catch")
         self.catch_stop_event.clear()
         self._set_catch_running(True, watching=False)
         self.catch_worker = threading.Thread(target=self._run_catch_once, daemon=True)
@@ -570,9 +696,15 @@ class DownloaderApp(tk.Tk):
     def _start_catch_watch(self):
         if self.catch_worker and self.catch_worker.is_alive():
             return
+        if not self.selected_corps["catch"]:
+            messagebox.showwarning(APP_TITLE, "Choose a company from the search suggestions first.")
+            return
         if self.catch_interval_var.get() <= 0:
             messagebox.showwarning(APP_TITLE, "Interval minutes must be greater than 0.")
             return
+        if not self._validate_catch_dates():
+            return
+        self._hide_company_suggestions("catch")
         self.catch_stop_event.clear()
         self._set_catch_running(True, watching=True)
         self.catch_worker = threading.Thread(target=self._run_catch_watch, daemon=True)
@@ -606,14 +738,38 @@ class DownloaderApp(tk.Tk):
         keyword = self.catch_keyword_var.get().strip()
         max_results = int(self.catch_max_results_var.get())
         output_dir = Path(self.catch_output_var.get())
+        if self.catch_today_only_var.get():
+            start_date = date.today().isoformat()
+            end_date = start_date
+        else:
+            start_date = self.catch_start_var.get().strip()
+            end_date = self.catch_end_var.get().strip()
 
         def tell(message):
             self.message_queue.put(("catch_log", message))
 
-        result = crawl_catch_recruits(keyword=keyword, max_results=max_results, progress=tell)
+        result = crawl_catch_recruits(
+            keyword=keyword,
+            max_results=max_results,
+            start_date=start_date,
+            end_date=end_date,
+            progress=tell,
+        )
         output_path = output_dir / default_catch_output_path(keyword or "all").name
         write_catch_json(result, output_path)
         self.message_queue.put(("catch_result", result, output_path))
+
+    def _validate_catch_dates(self):
+        try:
+            start_date = parse_catch_date(self.catch_start_var.get().strip())
+            end_date = parse_catch_date(self.catch_end_var.get().strip())
+        except CatchRecruitError as exc:
+            messagebox.showwarning(APP_TITLE, str(exc))
+            return False
+        if end_date < start_date:
+            messagebox.showwarning(APP_TITLE, "End date must be the same as or later than start date.")
+            return False
+        return True
 
     def _drain_queue(self):
         try:
@@ -633,16 +789,16 @@ class DownloaderApp(tk.Tk):
                     messagebox.showerror(APP_TITLE, str(exc))
                     self._log(f"ERROR: {exc}")
                 elif isinstance(item, tuple) and item[0] == "company_suggestions":
-                    _kind, token, query, candidates = item
-                    if token == self.company_lookup_token and query == self.company_var.get().strip():
-                        self._show_company_suggestions(candidates)
-                        self.status_var.set(f"Found {len(candidates)} company match(es).")
+                    _message_type, kind, token, query, candidates = item
+                    if token == self.lookup_tokens[kind] and query == self._lookup_var(kind).get().strip():
+                        self._show_company_suggestions(kind, candidates)
+                        self._lookup_status_var(kind).set(f"Found {len(candidates)} company match(es).")
                 elif isinstance(item, tuple) and item[0] == "company_suggestions_error":
-                    _kind, token, exc = item
-                    if token == self.company_lookup_token:
-                        self._hide_company_suggestions()
-                        self.status_var.set("No company matches.")
-                        self._log(f"Company search: {exc}")
+                    _message_type, kind, token, exc = item
+                    if token == self.lookup_tokens[kind]:
+                        self._hide_company_suggestions(kind)
+                        self._lookup_status_var(kind).set("No company matches.")
+                        self._lookup_log(kind, f"Company search: {exc}")
                 elif isinstance(item, tuple) and item[0] == "news_log":
                     self._news_log(item[1])
                 elif isinstance(item, tuple) and item[0] == "news_done":
@@ -717,6 +873,7 @@ class DownloaderApp(tk.Tk):
                 values=(
                     item.get("company", ""),
                     item.get("title", ""),
+                    item.get("start_date", ""),
                     item.get("deadline", ""),
                     item.get("career", ""),
                     item.get("location", ""),
@@ -794,3 +951,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

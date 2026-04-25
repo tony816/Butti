@@ -39,6 +39,8 @@ The app has three tabs:
 - `Catch Recruits`: read Catch recruit postings once or start regular reading.
 - `Company News`: crawl Naver News and Google News metadata over a date range and save JSON.
 
+All three tabs use the same company search UX: type a company name or stock code, then select the exact company from the suggestions shown under the input box.
+
 In `Business Reports`:
 
 1. Choose `OpenDART business reports`.
@@ -51,21 +53,25 @@ For `Naver Finance research`, use the same company suggestion list, then set `Na
 
 In `Catch Recruits`:
 
-1. Enter a keyword or company name.
-2. Choose an output folder.
-3. Set `Max results`.
-4. Click `Read Once`, or set `Interval minutes` and click `Start Regular Reading`.
-5. Click `Stop` to end regular reading.
+1. Type a company name or stock code.
+2. Select the exact company from the suggestions shown under the input box.
+3. Choose an output folder.
+4. Set the recruit opening date range, or click `Today` / check `Today only`.
+5. Set `Max results`.
+6. Click `Read Once`, or set `Interval minutes` and click `Start Regular Reading`.
+7. Click `Stop` to end regular reading.
 
 Each Catch run saves a timestamped JSON file in the selected output folder and shows the latest results in the table.
+Double-click a row in the table to open the Catch recruit posting in your browser.
 
 In `Company News`:
 
-1. Enter a company name.
-2. Choose `YYYY-MM-DD` start and end dates.
-3. Select `all`, `naver`, or `google`.
-4. Optionally choose a JSON output file.
-5. Click `Crawl News JSON`.
+1. Type a company name or stock code.
+2. Select the exact company from the suggestions shown under the input box.
+3. Choose `YYYY-MM-DD` start and end dates.
+4. Select `all`, `naver`, or `google`.
+5. Optionally choose a JSON output file.
+6. Click `Crawl News JSON`.
 
 Command Line
 ------------
@@ -92,6 +98,7 @@ Catch recruit postings:
 
 ```powershell
 python .\crawl_catch_recruits.py Samsung --max-results 30
+python .\crawl_catch_recruits.py Samsung --start-date 2026-04-25 --end-date 2026-04-25 --max-results 30
 python .\crawl_catch_recruits.py Samsung --watch --interval-minutes 60 --max-results 30
 ```
 

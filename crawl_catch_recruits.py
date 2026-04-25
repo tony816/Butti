@@ -6,7 +6,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 
@@ -76,6 +76,35 @@ def safe_filename(value):
 def default_output_path(keyword):
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     return APP_DIR / f"catch_recruits_{safe_filename(keyword or 'all')}_{stamp}.json"
+
+
+def parse_date(value):
+    if isinstance(value, date) and not isinstance(value, datetime):
+        return value
+    try:
+        return datetime.strptime(str(value), "%Y-%m-%d").date()
+    except ValueError as exc:
+        raise CatchRecruitError(f"Invalid date '{value}'. Use YYYY-MM-DD.") from exc
+
+
+def parse_recruit_date(value):
+    value = clean_text(value)
+    if not value:
+        return None
+    for candidate in (value[:10], value):
+        try:
+            return datetime.strptime(candidate, "%Y-%m-%d").date()
+        except ValueError:
+            continue
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).date()
+    except ValueError:
+        return None
+
+
+def validate_date_range(start_date, end_date):
+    if start_date and end_date and end_date < start_date:
+        raise CatchRecruitError("End date must be the same as or later than start date.")
 
 
 def build_recruit_params(keyword, page, page_size, sort):
@@ -170,12 +199,35 @@ def deduplicate_recruits(items):
     return unique
 
 
-def crawl_catch_recruits(keyword="", max_results=DEFAULT_MAX_RESULTS, page_size=30, sort=1, fetch=request_json, progress=None):
+def is_within_date_range(item, start_date=None, end_date=None):
+    recruit_date = parse_recruit_date(item.get("start_date", ""))
+    if not recruit_date:
+        return True
+    if start_date and recruit_date < start_date:
+        return False
+    if end_date and recruit_date > end_date:
+        return False
+    return True
+
+
+def crawl_catch_recruits(
+    keyword="",
+    max_results=DEFAULT_MAX_RESULTS,
+    page_size=30,
+    sort=1,
+    start_date=None,
+    end_date=None,
+    fetch=request_json,
+    progress=None,
+):
     keyword = keyword.strip()
     if max_results < 1:
         raise CatchRecruitError("max_results must be 1 or greater.")
     if page_size < 1:
         raise CatchRecruitError("page_size must be 1 or greater.")
+    start_date = parse_date(start_date) if start_date else None
+    end_date = parse_date(end_date) if end_date else None
+    validate_date_range(start_date, end_date)
 
     items = []
     total_count = 0
@@ -183,15 +235,22 @@ def crawl_catch_recruits(keyword="", max_results=DEFAULT_MAX_RESULTS, page_size=
     while len(items) < max_results:
         if progress:
             progress(f"Reading Catch recruit page {page}...")
-        params = build_recruit_params(keyword, page, min(page_size, max_results), sort)
+        request_page_size = min(page_size, max_results)
+        params = build_recruit_params(keyword, page, request_page_size, sort)
         payload = fetch(CATCH_RECRUIT_API, params=params)
         rows = get_recruit_rows(payload)
         total_count = total_count or get_total_count(payload)
         if not rows:
             break
-        items.extend(normalize_recruit(row) for row in rows)
-        if len(rows) < page_size:
+        normalized_rows = [normalize_recruit(row) for row in rows]
+        items.extend(item for item in normalized_rows if is_within_date_range(item, start_date, end_date))
+        if len(rows) < request_page_size:
             break
+        if start_date and normalized_rows:
+            row_dates = [parse_recruit_date(item.get("start_date", "")) for item in normalized_rows]
+            dated_rows = [row_date for row_date in row_dates if row_date]
+            if dated_rows and max(dated_rows) < start_date:
+                break
         page += 1
         time.sleep(0.5)
 
@@ -199,6 +258,8 @@ def crawl_catch_recruits(keyword="", max_results=DEFAULT_MAX_RESULTS, page_size=
     return {
         "source": "catch",
         "keyword": keyword,
+        "start_date": start_date.isoformat() if start_date else "",
+        "end_date": end_date.isoformat() if end_date else "",
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "total_count": total_count,
         "items": items,
@@ -218,6 +279,8 @@ def run_once(args):
         max_results=args.max_results,
         page_size=args.page_size,
         sort=args.sort,
+        start_date=args.start_date,
+        end_date=args.end_date,
         progress=print,
     )
     output_path = Path(args.output) if args.output else default_output_path(args.keyword or "all")
@@ -234,6 +297,8 @@ def parse_args():
     parser.add_argument("--max-results", type=int, default=DEFAULT_MAX_RESULTS, help="Maximum recruits to save. Default: 30")
     parser.add_argument("--page-size", type=int, default=30, help="Catch API page size. Default: 30")
     parser.add_argument("--sort", type=int, default=1, help="Catch sort code. 1 is latest on the current site.")
+    parser.add_argument("--start-date", help="Only include postings opened on or after this date, YYYY-MM-DD.")
+    parser.add_argument("--end-date", help="Only include postings opened on or before this date, YYYY-MM-DD.")
     parser.add_argument("--watch", action="store_true", help="Keep reading on a regular interval.")
     parser.add_argument("--interval-minutes", type=float, default=DEFAULT_INTERVAL_MINUTES, help="Watch interval. Default: 60")
     return parser.parse_args()
