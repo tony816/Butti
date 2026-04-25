@@ -1,0 +1,7 @@
+.env
+__pycache__/
+*.py[cod]
+corpCode.xml
+downloads/
+run_downloader.log
+_tmp_pdf_test/
