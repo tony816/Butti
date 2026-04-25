@@ -228,8 +228,8 @@ def run_once(args):
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Read Catch 채용공고 data and save it as JSON.")
-    parser.add_argument("keyword", nargs="?", default="", help="Company or keyword to search, for example 삼성 or 네이버")
+    parser = argparse.ArgumentParser(description="Read Catch recruit data and save it as JSON.")
+    parser.add_argument("keyword", nargs="?", default="", help="Company or keyword to search, for example Samsung or Naver")
     parser.add_argument("--output", help="JSON output path. Defaults to catch_recruits_<keyword>_<timestamp>.json")
     parser.add_argument("--max-results", type=int, default=DEFAULT_MAX_RESULTS, help="Maximum recruits to save. Default: 30")
     parser.add_argument("--page-size", type=int, default=30, help="Catch API page size. Default: 30")

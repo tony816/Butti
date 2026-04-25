@@ -1,21 +1,21 @@
-OpenDART / Naver Finance PDF Downloader
-=======================================
+OpenDART / Catch / News Reader
+==============================
 
-GUI app for downloading recent annual business report PDFs from OpenDART/DART, plus command-line tools for Naver Finance research PDFs and company news metadata.
+GUI app for downloading recent annual business report PDFs from OpenDART/DART, reading Catch recruit postings, and crawling company news metadata from Naver/Google.
 
 Files
 -----
 
-- `opendart_gui.py`: OpenDART GUI application.
+- `opendart_gui.py`: Main GUI application.
 - `download_business_reports.py`: OpenDART/DART and Naver Finance download logic with optional CLI.
 - `crawl_company_news.py`: Naver/Google company news metadata crawler.
-- `crawl_catch_recruits.py`: Catch 채용공고 metadata crawler with one-shot and watch modes.
+- `crawl_catch_recruits.py`: Catch recruit metadata crawler with one-shot and watch modes.
 - `test_crawl_company_news.py`: Unit tests for the news crawler.
 - `test_crawl_catch_recruits.py`: Unit tests for the Catch recruit crawler.
 - `.env`: API key configuration file for OpenDART.
-- `run_downloader.bat`: double-click launcher for Windows.
-- `run_downloader.ps1`: PowerShell launcher.
-- `run_catch_recruits.bat`: double-click launcher for regular Catch recruit crawling.
+- `run_downloader.bat`: double-click GUI launcher for Windows.
+- `run_downloader.ps1`: PowerShell GUI launcher.
+- `run_catch_recruits.bat`: double-click launcher for command-line Catch recruit crawling.
 
 Setup
 -----
@@ -28,80 +28,89 @@ Setup
 OPENDART_API_KEY=YOUR_API_KEY_HERE
 ```
 
-Run
+GUI
 ---
 
-Double-click `run_downloader.bat` to open the OpenDART GUI.
+Double-click `run_downloader.bat` to open the app.
 
-In the app:
+The app has three tabs:
 
-1. Enter a company name, for example `Samsung Electronics` or `삼성전자`.
-2. Confirm the API key field is filled from `.env`.
-3. Choose the output folder.
-4. Click `Download PDFs`.
+- `Business Reports`: download annual business report PDFs through OpenDART.
+- `Catch Recruits`: read Catch recruit postings once or start regular reading.
+- `Company News`: crawl Naver News and Google News metadata over a date range and save JSON.
 
-Command-line mode is still available for OpenDART:
+In `Business Reports`:
+
+1. Choose `OpenDART business reports`.
+2. Type a company name or stock code in `Company`.
+3. Select the exact company from the suggestions shown under the input box.
+4. Choose an output folder and report count.
+5. Click `Download PDFs`.
+
+For `Naver Finance research`, use the same company suggestion list, then set `Naver start date` and `Naver end date` as `YYYY-MM-DD` and choose how many `Research PDFs` to download.
+
+In `Catch Recruits`:
+
+1. Enter a keyword or company name.
+2. Choose an output folder.
+3. Set `Max results`.
+4. Click `Read Once`, or set `Interval minutes` and click `Start Regular Reading`.
+5. Click `Stop` to end regular reading.
+
+Each Catch run saves a timestamped JSON file in the selected output folder and shows the latest results in the table.
+
+In `Company News`:
+
+1. Enter a company name.
+2. Choose `YYYY-MM-DD` start and end dates.
+3. Select `all`, `naver`, or `google`.
+4. Optionally choose a JSON output file.
+5. Click `Crawl News JSON`.
+
+Command Line
+------------
+
+OpenDART:
 
 ```powershell
-python .\download_business_reports.py 삼성전자
+python .\download_business_reports.py Samsung
 ```
 
-Naver Finance research PDFs can be downloaded from the command line without an OpenDART API key:
+Naver Finance research PDFs:
 
 ```powershell
-python .\download_business_reports.py 삼성전자 --source naver --count 3
+python .\download_business_reports.py Samsung --source naver --count 3
 ```
 
-Naver mode searches the Npay 증권 종목분석 리포트 page and saves matching PDF files to `downloads` by default. Use `--output` to choose another folder.
-
-Company News Crawler
---------------------
-
-Collect Naver News and Google News metadata for a company over a date range and save it as JSON:
+With a date range:
 
 ```powershell
-python .\crawl_company_news.py 삼성전자 --start-date 2026-01-01 --end-date 2026-04-25
+python .\download_business_reports.py 삼성전자 --source naver --count 10 --start-date 2026-04-01 --end-date 2026-04-30
 ```
 
-Useful options:
+Catch recruit postings:
 
 ```powershell
-python .\crawl_company_news.py 삼성전자 --start-date 2026-01-01 --end-date 2026-04-25 --source google --max-results 5 --output news_results.json
+python .\crawl_catch_recruits.py Samsung --max-results 30
+python .\crawl_catch_recruits.py Samsung --watch --interval-minutes 60 --max-results 30
 ```
 
-The JSON includes `company`, `start_date`, `end_date`, `generated_at`, `sources`, and `items`. Each item contains `source`, `title`, `publisher`, `published_at`, `link`, and `summary`.
+On Windows, command-line Catch crawling can also be started with:
 
-Run tests:
+```powershell
+.\run_catch_recruits.bat Samsung 30
+```
+
+Company news:
+
+```powershell
+python .\crawl_company_news.py Samsung --start-date 2026-01-01 --end-date 2026-04-25
+```
+
+Tests
+-----
 
 ```powershell
 python -m unittest test_crawl_company_news.py
-```
-
-Catch Recruit Crawler
----------------------
-
-Collect 채용공고 metadata from Catch and save it as JSON:
-
-```powershell
-python .\crawl_catch_recruits.py 삼성 --max-results 30
-```
-
-Run it regularly in the foreground:
-
-```powershell
-python .\crawl_catch_recruits.py 삼성 --watch --interval-minutes 60 --max-results 30
-```
-
-On Windows, you can also double-click `run_catch_recruits.bat`. By default it searches `삼성` every 60 minutes. From PowerShell, pass a keyword and interval like this:
-
-```powershell
-.\run_catch_recruits.bat 네이버 30
-```
-
-The JSON includes `source`, `keyword`, `generated_at`, `total_count`, and `items`. Each item contains normalized fields such as `company`, `title`, `deadline`, `career`, `education`, `location`, `employment_type`, `link`, plus the original `raw` Catch API row.
-
-Run Catch crawler tests:
-
-```powershell
 python -m unittest test_crawl_catch_recruits.py
 ```

@@ -18,17 +18,36 @@ from crawl_company_news import (
 )
 
 
-NAVER_HTML = """
+NAVER_LEGACY_HTML = """
 <ul class="list_news">
   <li>
     <div class="news_wrap api_ani_send">
-      <a class="news_tit" href="https://example.com/a" title="삼성전자 새 소식">삼성전자 새 소식</a>
-      <a class="info press" href="#">테스트신문 언론사 선정</a>
+      <a class="news_tit" href="https://example.com/a" title="Samsung update">Samsung update</a>
+      <a class="info press" href="#">Example Press</a>
       <span class="info">2026.04.24.</span>
-      <a class="api_txt_lines dsc_txt_wrap" href="#">요약 문장입니다.</a>
+      <a class="api_txt_lines dsc_txt_wrap" href="#">Legacy summary.</a>
     </div>
   </li>
 </ul>
+"""
+
+NAVER_SDS_HTML = """
+<section class="sc_new sp_nnews">
+  <div data-sds-comp="Profile">
+    <span class="sds-comps-profile-info-title-text">
+      <a href="https://press.example.com"><span>Example Daily</span></a>
+    </span>
+    <span>2025.12.31.</span>
+  </div>
+  <div>
+    <a href="https://example.com/sds-title" data-heatmap-target=".tit">
+      <span class="sds-comps-text">Samsung SDS title</span>
+    </a>
+    <a href="https://example.com/sds-title" data-heatmap-target=".body">
+      <span>Samsung SDS summary text.</span>
+    </a>
+  </div>
+</section>
 """
 
 GOOGLE_RSS = """
@@ -57,7 +76,7 @@ class CompanyNewsCrawlerTests(unittest.TestCase):
 
     def test_write_json_preserves_empty_items(self):
         result = {
-            "company": "삼성전자",
+            "company": "Samsung",
             "start_date": "2026-01-01",
             "end_date": "2026-04-25",
             "generated_at": "2026-04-25T00:00:00+00:00",
@@ -68,16 +87,25 @@ class CompanyNewsCrawlerTests(unittest.TestCase):
             path = write_json(result, Path(tmpdir) / "news.json")
             loaded = json.loads(path.read_text(encoding="utf-8"))
         self.assertEqual(loaded["items"], [])
-        self.assertEqual(loaded["company"], "삼성전자")
+        self.assertEqual(loaded["company"], "Samsung")
 
-    def test_parse_naver_news_html(self):
-        items = parse_naver_news_html(NAVER_HTML)
+    def test_parse_naver_legacy_news_html(self):
+        items = parse_naver_news_html(NAVER_LEGACY_HTML)
         self.assertEqual(len(items), 1)
         self.assertEqual(items[0]["source"], "naver")
-        self.assertEqual(items[0]["title"], "삼성전자 새 소식")
-        self.assertEqual(items[0]["publisher"], "테스트신문")
+        self.assertEqual(items[0]["title"], "Samsung update")
+        self.assertEqual(items[0]["publisher"], "Example Press")
         self.assertEqual(items[0]["published_at"], "2026-04-24")
-        self.assertEqual(items[0]["summary"], "요약 문장입니다.")
+        self.assertEqual(items[0]["summary"], "Legacy summary.")
+
+    def test_parse_naver_sds_news_html(self):
+        items = parse_naver_news_html(NAVER_SDS_HTML)
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]["source"], "naver")
+        self.assertEqual(items[0]["title"], "Samsung SDS title")
+        self.assertEqual(items[0]["publisher"], "Example Daily")
+        self.assertEqual(items[0]["published_at"], "2025-12-31")
+        self.assertEqual(items[0]["summary"], "Samsung SDS summary text.")
 
     def test_parse_google_news_rss(self):
         items = parse_google_news_rss(GOOGLE_RSS)
@@ -88,13 +116,13 @@ class CompanyNewsCrawlerTests(unittest.TestCase):
         self.assertTrue(items[0]["published_at"].startswith("2026-04-24T01:02:03"))
 
     def test_google_before_date_is_exclusive_next_day(self):
-        params = build_google_rss_params("삼성전자", date(2026, 1, 1), date(2026, 4, 25))
+        params = build_google_rss_params("Samsung", date(2026, 1, 1), date(2026, 4, 25))
         self.assertIn("after:2026-01-01", params["q"])
         self.assertIn("before:2026-04-26", params["q"])
 
     def test_crawl_functions_accept_injected_fetchers(self):
-        naver = crawl_naver_news("삼성전자", date(2026, 1, 1), date(2026, 4, 25), 5, fetch=lambda *_args, **_kwargs: NAVER_HTML)
-        google = crawl_google_news("삼성전자", date(2026, 1, 1), date(2026, 4, 25), 5, fetch=lambda *_args, **_kwargs: GOOGLE_RSS)
+        naver = crawl_naver_news("Samsung", date(2026, 1, 1), date(2026, 4, 25), 5, fetch=lambda *_args, **_kwargs: NAVER_SDS_HTML)
+        google = crawl_google_news("Samsung", date(2026, 1, 1), date(2026, 4, 25), 5, fetch=lambda *_args, **_kwargs: GOOGLE_RSS)
         self.assertEqual(len(naver), 1)
         self.assertEqual(len(google), 1)
 

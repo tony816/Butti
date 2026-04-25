@@ -5,3 +5,5 @@ corpCode.xml
 downloads/
 run_downloader.log
 _tmp_pdf_test/
+catch_recruits_*.json
+news_*.json

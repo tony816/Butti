@@ -9,7 +9,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import zipfile
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from xml.etree import ElementTree
 
@@ -22,6 +22,7 @@ ENV_PATH = APP_DIR / ".env"
 CORP_CODE_CACHE = APP_DIR / "corpCode.xml"
 DEFAULT_OUTPUT_DIR = APP_DIR / "downloads"
 DEFAULT_HEADERS = {"User-Agent": "Mozilla/5.0"}
+DEFAULT_NAVER_MAX_PAGES = 200
 
 
 class DartError(Exception):
@@ -177,28 +178,72 @@ def normalize_spaces(value):
     return re.sub(r"\s+", " ", html.unescape(value or "")).strip()
 
 
-def find_corp(api_key, company_name, progress=None):
+def parse_date_arg(value, option_name="date"):
+    if value in (None, ""):
+        return None
+    try:
+        return datetime.strptime(value.strip(), "%Y-%m-%d").date()
+    except ValueError as exc:
+        raise DartError(f"{option_name} must be YYYY-MM-DD: {value}") from exc
+
+
+def parse_naver_report_date(value):
+    match = re.fullmatch(r"(\d{2})\.(\d{2})\.(\d{2})", (value or "").strip())
+    if not match:
+        return None
+    year, month, day = map(int, match.groups())
+    return date(2000 + year, month, day)
+
+
+def search_companies(api_key, company_name, limit=50, progress=None):
+    if not api_key and not CORP_CODE_CACHE.exists():
+        raise DartError("OpenDART API key is needed to build the company search index.")
     xml_path = ensure_corp_code_xml(api_key, progress=progress)
-    wanted = normalize_name(company_name)
+    query = company_name.strip()
+    wanted = normalize_name(query)
+    if not query:
+        raise DartError("Company name is empty.")
+
     root = ElementTree.parse(xml_path).getroot()
 
-    exact = []
-    partial = []
+    matches = []
     for item in root.findall("list"):
         corp_name = item.findtext("corp_name", default="")
         corp_code = item.findtext("corp_code", default="")
         stock_code = item.findtext("stock_code", default="").strip()
         row = {"corp_name": corp_name, "corp_code": corp_code, "stock_code": stock_code}
         normalized = normalize_name(corp_name)
-        if normalized == wanted:
-            exact.append(row)
-        elif wanted and wanted in normalized:
-            partial.append(row)
+        if stock_code == query:
+            rank = 0
+        elif stock_code and normalized == f"{wanted}전자":
+            rank = 1
+        elif stock_code and normalized == wanted:
+            rank = 2
+        elif stock_code and normalized.startswith(wanted):
+            rank = 3
+        elif stock_code and wanted in normalized:
+            rank = 4
+        elif normalized == wanted:
+            rank = 5
+        elif normalized.startswith(wanted):
+            rank = 6
+        elif wanted in normalized:
+            rank = 7
+        elif query and query in stock_code:
+            rank = 8
+        else:
+            continue
+        matches.append((rank, stock_code or "999999", corp_name, row))
 
-    candidates = exact or partial
-    if not candidates:
+    if not matches:
         raise DartError(f"Company not found: {company_name}")
 
+    matches.sort(key=lambda item: (item[0], item[1], item[2]))
+    return [row for _rank, _stock_code, _corp_name, row in matches[:limit]]
+
+
+def find_corp(api_key, company_name, progress=None):
+    candidates = search_companies(api_key, company_name, limit=10, progress=progress)
     listed = [corp for corp in candidates if corp["stock_code"]]
     return (listed or candidates)[0], candidates[:10]
 
@@ -338,10 +383,22 @@ def parse_naver_research_reports(page_html):
     return parser.reports
 
 
-def get_naver_research_reports(company, count=10, max_pages=20, progress=None):
+def get_naver_research_reports(
+    company,
+    count=10,
+    max_pages=DEFAULT_NAVER_MAX_PAGES,
+    start_date=None,
+    end_date=None,
+    progress=None,
+):
     reports = []
     seen_urls = set()
     wanted = normalize_name(company)
+    start_date = parse_date_arg(start_date, "start date") if isinstance(start_date, str) else start_date
+    end_date = parse_date_arg(end_date, "end date") if isinstance(end_date, str) else end_date
+    if start_date and end_date and start_date > end_date:
+        raise DartError("start date must be earlier than or equal to end date.")
+
     for page in range(1, max_pages + 1):
         if progress:
             progress(f"Searching Naver Finance research page {page} for {company}")
@@ -349,7 +406,16 @@ def get_naver_research_reports(company, count=10, max_pages=20, progress=None):
         if not page_reports:
             break
 
+        page_dates = [parse_naver_report_date(report["date"]) for report in page_reports]
+        page_dates = [report_date for report_date in page_dates if report_date]
+
         for report in page_reports:
+            report_date = parse_naver_report_date(report["date"])
+            report["parsed_date"] = report_date.isoformat() if report_date else ""
+            if start_date and report_date and report_date < start_date:
+                continue
+            if end_date and report_date and report_date > end_date:
+                continue
             if wanted not in normalize_name(report["stock_name"]):
                 continue
             pdf_url = report["pdf_url"]
@@ -359,6 +425,9 @@ def get_naver_research_reports(company, count=10, max_pages=20, progress=None):
             reports.append(report)
             if len(reports) >= count:
                 return reports
+
+        if start_date and page_dates and min(page_dates) < start_date:
+            break
 
     if not reports:
         raise DartError(f"No Naver Finance research PDFs found for: {company}")
@@ -389,7 +458,14 @@ def download_naver_research_pdf(report, output_dir):
     return output_path
 
 
-def download_naver_research_reports(company, count=10, output_dir=DEFAULT_OUTPUT_DIR, progress=None):
+def download_naver_research_reports(
+    company,
+    count=10,
+    output_dir=DEFAULT_OUTPUT_DIR,
+    start_date=None,
+    end_date=None,
+    progress=None,
+):
     company = company.strip()
     if not company:
         raise DartError("Company name is empty.")
@@ -400,7 +476,13 @@ def download_naver_research_reports(company, count=10, output_dir=DEFAULT_OUTPUT
         if progress:
             progress(message)
 
-    reports = get_naver_research_reports(company, count=count, progress=tell)
+    reports = get_naver_research_reports(
+        company,
+        count=count,
+        start_date=start_date,
+        end_date=end_date,
+        progress=tell,
+    )
     tell(f"Found {len(reports)} Naver Finance research report(s).")
 
     downloaded = []
@@ -418,7 +500,7 @@ def download_naver_research_reports(company, count=10, output_dir=DEFAULT_OUTPUT
     return {"company": company, "reports": reports, "downloaded": downloaded, "failed": failed}
 
 
-def download_business_reports(company, api_key=None, years=5, output_dir=DEFAULT_OUTPUT_DIR, progress=None):
+def download_business_reports(company, api_key=None, years=5, output_dir=DEFAULT_OUTPUT_DIR, progress=None, corp=None):
     api_key = (api_key or get_configured_api_key()).strip()
     if not api_key:
         raise DartError("OpenDART API key is empty. Put it in .env as OPENDART_API_KEY=your_key.")
@@ -429,7 +511,10 @@ def download_business_reports(company, api_key=None, years=5, output_dir=DEFAULT
         if progress:
             progress(message)
 
-    corp, candidates = find_corp(api_key, company.strip(), progress=tell)
+    if corp:
+        candidates = [corp]
+    else:
+        corp, candidates = find_corp(api_key, company.strip(), progress=tell)
     tell(f"Selected company: {corp['corp_name']} / corp_code={corp['corp_code']} / stock={corp['stock_code'] or '-'}")
 
     reports = get_recent_business_reports(api_key, corp["corp_code"], years=years)
@@ -468,6 +553,8 @@ def parse_args():
     parser.add_argument("--api-key", help="OpenDART API key. Defaults to OPENDART_API_KEY from .env or environment.")
     parser.add_argument("--years", type=int, default=5, help="Number of annual reports to download. Default: 5")
     parser.add_argument("--count", type=int, default=10, help="Number of Naver research PDFs to download. Default: 10")
+    parser.add_argument("--start-date", help="Naver research start date in YYYY-MM-DD format.")
+    parser.add_argument("--end-date", help="Naver research end date in YYYY-MM-DD format.")
     parser.add_argument("--output", default=str(DEFAULT_OUTPUT_DIR), help="PDF output directory. Default: downloads")
     return parser.parse_args()
 
@@ -480,6 +567,8 @@ def main():
             company=company,
             count=args.count,
             output_dir=Path(args.output),
+            start_date=args.start_date,
+            end_date=args.end_date,
             progress=print,
         )
     else:

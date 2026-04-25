@@ -99,7 +99,7 @@ def extract_first(pattern, text, flags=re.IGNORECASE | re.DOTALL):
     return clean_text(match.group(1)) if match else ""
 
 
-def parse_naver_news_html(page_html):
+def parse_naver_legacy_news_html(page_html):
     items = []
     title_matches = list(
         re.finditer(
@@ -142,6 +142,62 @@ def parse_naver_news_html(page_html):
     return items
 
 
+def parse_naver_sds_news_html(page_html):
+    items = []
+    blocks = re.split(r'(?=<div\b[^>]*\bdata-sds-comp="Profile")', page_html)
+    for block in blocks:
+        if 'data-heatmap-target=".tit"' not in block:
+            continue
+
+        title_match = re.search(
+            r'<a\b(?=[^>]*\bdata-heatmap-target="\.tit")[^>]*\bhref="([^"]+)"[^>]*>(.*?)</a>',
+            block,
+            re.IGNORECASE | re.DOTALL,
+        )
+        if not title_match:
+            continue
+
+        publisher = extract_first(
+            r'sds-comps-profile-info-title-text.*?<span\b[^>]*>(.*?)</span>',
+            block,
+        )
+        if not publisher:
+            publisher = extract_first(
+                r'<img\b[^>]*\balt="([^"]+?)의 프로필 이미지"',
+                block,
+            )
+
+        published_at = extract_first(r'>(\d{4}\.\d{2}\.\d{2}\.)<', block)
+        if published_at.endswith("."):
+            published_at = published_at[:-1].replace(".", "-")
+
+        summary_match = re.search(
+            r'<a\b(?=[^>]*\bdata-heatmap-target="\.body")[^>]*>(.*?)</a>',
+            block,
+            re.IGNORECASE | re.DOTALL,
+        )
+
+        items.append(
+            {
+                "source": "naver",
+                "title": clean_text(title_match.group(2)),
+                "publisher": publisher,
+                "published_at": published_at,
+                "link": html.unescape(title_match.group(1).strip()),
+                "summary": clean_text(summary_match.group(1)) if summary_match else "",
+            }
+        )
+
+    return items
+
+
+def parse_naver_news_html(page_html):
+    items = parse_naver_legacy_news_html(page_html)
+    if items:
+        return items
+    return parse_naver_sds_news_html(page_html)
+
+
 def crawl_naver_news(company, start_date, end_date, max_results, fetch=request_text):
     results = []
     start = 1
@@ -150,6 +206,8 @@ def crawl_naver_news(company, start_date, end_date, max_results, fetch=request_t
         page_html = fetch("https://search.naver.com/search.naver", params=params)
         page_items = parse_naver_news_html(page_html)
         if not page_items:
+            if not results and ("검색결과가 없습니다" in page_html or "뉴스검색 결과입니다" in page_html):
+                return []
             break
         results.extend(page_items)
         if len(page_items) < 10:
