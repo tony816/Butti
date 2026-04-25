@@ -67,7 +67,7 @@ class DownloaderApp(tk.Tk):
         self.naver_end_var = tk.StringVar(value=date.today().isoformat())
         self.status_var = tk.StringVar(value="Ready")
 
-        self.catch_keyword_var = tk.StringVar(value="Samsung")
+        self.catch_keyword_var = tk.StringVar()
         self.catch_output_var = tk.StringVar(value=str(DEFAULT_OUTPUT_DIR))
         self.catch_max_results_var = tk.IntVar(value=DEFAULT_MAX_RESULTS)
         self.catch_interval_var = tk.DoubleVar(value=DEFAULT_INTERVAL_MINUTES)
@@ -240,7 +240,7 @@ class DownloaderApp(tk.Tk):
         form.pack(fill="x")
         form.columnconfigure(1, weight=1)
 
-        ttk.Label(form, text="Keyword / company", style="Field.TLabel").grid(row=0, column=0, sticky="w", pady=(0, 6))
+        ttk.Label(form, text="Keyword / company (optional)", style="Field.TLabel").grid(row=0, column=0, sticky="w", pady=(0, 6))
         keyword = ttk.Entry(form, textvariable=self.catch_keyword_var, font=self.input_font)
         keyword.grid(row=1, column=0, columnspan=3, sticky="ew", pady=(0, 4))
         keyword.bind("<KeyRelease>", lambda event: self._on_lookup_key_release("catch", event))
@@ -682,9 +682,6 @@ class DownloaderApp(tk.Tk):
     def _start_catch_once(self):
         if self.catch_worker and self.catch_worker.is_alive():
             return
-        if not self.selected_corps["catch"]:
-            messagebox.showwarning(APP_TITLE, "Choose a company from the search suggestions first.")
-            return
         if not self._validate_catch_dates():
             return
         self._hide_company_suggestions("catch")
@@ -695,9 +692,6 @@ class DownloaderApp(tk.Tk):
 
     def _start_catch_watch(self):
         if self.catch_worker and self.catch_worker.is_alive():
-            return
-        if not self.selected_corps["catch"]:
-            messagebox.showwarning(APP_TITLE, "Choose a company from the search suggestions first.")
             return
         if self.catch_interval_var.get() <= 0:
             messagebox.showwarning(APP_TITLE, "Interval minutes must be greater than 0.")
