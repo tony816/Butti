@@ -1,3 +1,4 @@
+import argparse
 import queue
 import threading
 import time
@@ -42,8 +43,9 @@ MONO_FONT_FAMILY = "Malgun Gothic"
 
 
 class DownloaderApp(tk.Tk):
-    def __init__(self):
+    def __init__(self, startup_options=None):
         super().__init__()
+        self.startup_options = startup_options or {}
         self.title(APP_TITLE)
         self.geometry("860x680")
         self.minsize(780, 600)
@@ -94,6 +96,8 @@ class DownloaderApp(tk.Tk):
         self.batch_catch_var = tk.BooleanVar(value=False)
         self.batch_news_var = tk.BooleanVar(value=True)
         self.batch_status_var = tk.StringVar(value="Ready")
+
+        self._install_lookup_traces()
 
         self.configure(bg="#f6f7f9")
         self._configure_style()
@@ -147,22 +151,37 @@ class DownloaderApp(tk.Tk):
             style="Subtitle.TLabel",
         ).pack(anchor="w", pady=(6, 0))
 
-        notebook = ttk.Notebook(self)
-        notebook.pack(fill="both", expand=True, padx=18, pady=18)
+        self.notebook = ttk.Notebook(self)
+        self.notebook.pack(fill="both", expand=True, padx=18, pady=18)
 
-        batch_tab = ttk.Frame(notebook, padding=(6, 6))
-        reports_tab = ttk.Frame(notebook, padding=(6, 6))
-        catch_tab = ttk.Frame(notebook, padding=(6, 6))
-        news_tab = ttk.Frame(notebook, padding=(6, 6))
-        notebook.add(batch_tab, text="Batch Run")
-        notebook.add(reports_tab, text="Business Reports")
-        notebook.add(catch_tab, text="Catch Recruits")
-        notebook.add(news_tab, text="Company News")
+        batch_tab = ttk.Frame(self.notebook, padding=(6, 6))
+        reports_tab = ttk.Frame(self.notebook, padding=(6, 6))
+        catch_tab = ttk.Frame(self.notebook, padding=(6, 6))
+        news_tab = ttk.Frame(self.notebook, padding=(6, 6))
+        self.notebook.add(batch_tab, text="Batch Run")
+        self.notebook.add(reports_tab, text="Business Reports")
+        self.notebook.add(catch_tab, text="Catch Recruits")
+        self.notebook.add(news_tab, text="Company News")
 
         self._build_batch_tab(batch_tab)
         self._build_reports_tab(reports_tab)
         self._build_catch_tab(catch_tab)
         self._build_news_tab(news_tab)
+        self.catch_tab = catch_tab
+        self.after(250, self._apply_startup_options)
+
+    def _apply_startup_options(self):
+        if not self.startup_options.get("catch_today"):
+            return
+        self.notebook.select(self.catch_tab)
+        today = date.today().isoformat()
+        self.catch_today_only_var.set(True)
+        self.catch_start_var.set(today)
+        self.catch_end_var.set(today)
+        self.catch_keyword_var.set(self.startup_options.get("catch_keyword", ""))
+        self.catch_output_var.set(self.startup_options.get("catch_output_dir") or str(DEFAULT_OUTPUT_DIR))
+        self.catch_max_results_var.set(self.startup_options.get("catch_max_results") or DEFAULT_MAX_RESULTS)
+        self._start_catch_once()
 
     def _build_batch_tab(self, parent):
         form = ttk.Frame(parent)
@@ -487,6 +506,14 @@ class DownloaderApp(tk.Tk):
         if self.catch_today_only_var.get():
             self._set_catch_dates_today()
 
+    def _install_lookup_traces(self):
+        for kind, variable in (
+            ("batch", self.batch_company_var),
+            ("reports", self.company_var),
+            ("news", self.news_company_var),
+        ):
+            variable.trace_add("write", lambda *_args, lookup_kind=kind: self._on_lookup_text_changed(lookup_kind))
+
     def _create_company_suggestion_list(self, parent, kind):
         listbox = tk.Listbox(
             parent,
@@ -541,6 +568,16 @@ class DownloaderApp(tk.Tk):
     def _on_lookup_key_release(self, kind, event):
         if event.keysym in {"Up", "Down", "Return", "Escape"}:
             return
+        self._schedule_company_lookup(kind)
+
+    def _on_lookup_text_changed(self, kind):
+        selected = self.selected_corps.get(kind)
+        current = self._lookup_var(kind).get().strip()
+        if selected and current == selected["corp_name"]:
+            return
+        self._schedule_company_lookup(kind)
+
+    def _schedule_company_lookup(self, kind):
         self.selected_corps[kind] = None
         if self.lookup_after_ids[kind]:
             self.after_cancel(self.lookup_after_ids[kind])
@@ -1004,7 +1041,7 @@ class DownloaderApp(tk.Tk):
                     _message_type, kind, token, exc = item
                     if token == self.lookup_tokens[kind]:
                         self._hide_company_suggestions(kind)
-                        self._lookup_status_var(kind).set("No company matches.")
+                        self._lookup_status_var(kind).set(str(exc))
                         self._lookup_log(kind, f"Company search: {exc}")
                 elif isinstance(item, tuple) and item[0] == "news_log":
                     self._news_log(item[1])
@@ -1027,6 +1064,16 @@ class DownloaderApp(tk.Tk):
                     self._finish_catch("Failed")
                     messagebox.showerror(APP_TITLE, str(exc))
                     self._catch_log(f"ERROR: {exc}")
+                elif isinstance(item, tuple) and item[0] == "batch_log":
+                    self._batch_log(item[1])
+                elif isinstance(item, tuple) and item[0] == "batch_done":
+                    _message_type, completed, total = item
+                    self._finish_batch(f"Done. Completed {completed}/{total} task(s).")
+                elif isinstance(item, tuple) and item[0] == "batch_error":
+                    exc = item[1]
+                    self._finish_batch("Failed")
+                    messagebox.showerror(APP_TITLE, str(exc))
+                    self._batch_log(f"ERROR: {exc}")
                 else:
                     self._log(str(item))
         except queue.Empty:
@@ -1040,6 +1087,20 @@ class DownloaderApp(tk.Tk):
         self.report_source_combo.state(["!disabled"])
         self._sync_report_source_fields()
         self._log(status)
+
+    def _set_batch_running(self, running):
+        if running:
+            self.batch_run_button.state(["disabled"])
+            self.batch_progress.start(12)
+            self.batch_status_var.set("Running...")
+        else:
+            self.batch_progress.stop()
+            self.batch_run_button.state(["!disabled"])
+
+    def _finish_batch(self, status):
+        self._set_batch_running(False)
+        self.batch_status_var.set(status)
+        self._batch_log(status)
 
     def _set_catch_running(self, running):
         if running:
@@ -1187,6 +1248,10 @@ class DownloaderApp(tk.Tk):
         self.catch_log.insert("end", f"{message}\n")
         self.catch_log.see("end")
 
+    def _batch_log(self, message):
+        self.batch_log.insert("end", f"{message}\n")
+        self.batch_log.see("end")
+
     def _news_log(self, message):
         self.news_log.insert("end", f"{message}\n")
         self.news_log.see("end")
@@ -1195,9 +1260,38 @@ class DownloaderApp(tk.Tk):
         self.destroy()
 
 
-def main():
+def build_parser():
+    parser = argparse.ArgumentParser(description="Open the Butti GUI.")
+    parser.add_argument(
+        "--catch-today",
+        action="store_true",
+        help="Open the Catch Recruits tab and read postings opened today.",
+    )
+    parser.add_argument("--catch-keyword", default="", help="Catch title keyword for --catch-today.")
+    parser.add_argument(
+        "--catch-output-dir",
+        default=str(DEFAULT_OUTPUT_DIR),
+        help="Output directory for Catch JSON results.",
+    )
+    parser.add_argument(
+        "--catch-max-results",
+        type=int,
+        default=DEFAULT_MAX_RESULTS,
+        help="Maximum Catch postings to read for --catch-today.",
+    )
+    return parser
+
+
+def main(argv=None):
+    args = build_parser().parse_args(argv)
+    startup_options = {
+        "catch_today": args.catch_today,
+        "catch_keyword": args.catch_keyword,
+        "catch_output_dir": args.catch_output_dir,
+        "catch_max_results": args.catch_max_results,
+    }
     try:
-        app = DownloaderApp()
+        app = DownloaderApp(startup_options=startup_options)
         app.mainloop()
     except (DartError, CatchRecruitError, NewsCrawlerError) as exc:
         messagebox.showerror(APP_TITLE, str(exc))

@@ -65,6 +65,12 @@ Each Catch run reads up to the configured max result count, saves a timestamped 
 Select one or more rows and click `Add Selected` to add them to the interested recruit list and automatically save `catch_interested_recruits.json` in the selected output folder. Click `Show Interested Only` to switch the table to interested recruits, and `Show All Results` to switch back.
 Double-click a row in the table to open the Catch recruit posting in your browser.
 
+To open the GUI directly on today's Catch postings and populate the table automatically:
+
+```powershell
+python .\opendart_gui.py --catch-today --catch-max-results 30 --catch-output-dir downloads
+```
+
 In `Company News`:
 
 1. Type a company name or stock code.
@@ -128,7 +134,7 @@ AI Skill / CLI
 This project can also be used by Codex through the installed `butti` skill at:
 
 ```text
-/Users/songminsu/.codex/skills/butti
+C:\Users\tony960816\.codex\skills\butti
 ```
 
 The GUI remains available for manual use. AI automation should use `butti_ai.py`:
